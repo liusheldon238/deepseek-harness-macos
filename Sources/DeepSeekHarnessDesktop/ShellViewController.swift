@@ -9,6 +9,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     private let logoView = NSImageView()
     private let statusLabel = NSTextField(labelWithString: "正在准备环境…")
     private let detailLabel = NSTextField(labelWithString: "")
+    private let errorLogView = NSTextView()
+    private let errorLogScrollView = NSScrollView()
     private let progress = NSProgressIndicator()
     private let retryButton = NSButton(title: "重试", target: nil, action: nil)
     private let webView: WKWebView
@@ -43,7 +45,21 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
             logoView.heightAnchor.constraint(equalToConstant: 96)
         ])
 
-        let status = NSStackView(views: [logoView, statusLabel, detailLabel, progress, retryButton])
+        errorLogView.isEditable = false
+        errorLogView.isSelectable = true
+        errorLogView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        errorLogView.textColor = .systemRed
+        errorLogView.backgroundColor = NSColor.systemRed.withAlphaComponent(0.06)
+        errorLogView.textContainerInset = NSSize(width: 10, height: 8)
+        errorLogScrollView.documentView = errorLogView
+        errorLogScrollView.hasVerticalScroller = true
+        errorLogScrollView.hasHorizontalScroller = true
+        errorLogScrollView.borderType = .bezelBorder
+        errorLogScrollView.translatesAutoresizingMaskIntoConstraints = false
+        errorLogScrollView.isHidden = true
+        errorLogScrollView.heightAnchor.constraint(equalToConstant: 150).isActive = true
+
+        let status = NSStackView(views: [logoView, statusLabel, detailLabel, progress, retryButton, errorLogScrollView])
         status.orientation = .vertical
         status.alignment = .centerX
         status.spacing = 12
@@ -56,6 +72,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         progress.controlSize = .regular
         progress.startAnimation(nil)
         retryButton.isHidden = true
+        errorLogScrollView.isHidden = true
         retryButton.target = self
         retryButton.action = #selector(retry)
 
@@ -104,6 +121,16 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
                 let url = try await dshManager.start(using: runtime)
                 try Task.checkCancellation()
                 statusLabel.stringValue = "正在加载 Web UI…"
+                // DSH has already passed its HTTP health check. Reveal the
+                // WebView immediately so the launch logo cannot remain over
+                // the page while secondary assets finish loading.
+                progress.stopAnimation(nil)
+                progress.isHidden = true
+                statusLabel.isHidden = true
+                detailLabel.isHidden = true
+                retryButton.isHidden = true
+                errorLogScrollView.isHidden = true
+                webView.isHidden = false
                 webView.load(URLRequest(url: url))
             } catch {
                 if error is CancellationError { return }
@@ -119,8 +146,10 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         statusLabel.isHidden = false
         detailLabel.isHidden = false
         statusLabel.stringValue = "启动失败"
-        let log = dshManager.logFileURL.path
-        detailLabel.stringValue = "\(error.localizedDescription)\n日志：\(log)"
+        detailLabel.stringValue = error.localizedDescription
+        let log = dshManager.latestLog.trimmingCharacters(in: .whitespacesAndNewlines)
+        errorLogView.string = log.isEmpty ? "暂无后台输出。请点击“重试”再次启动。" : log
+        errorLogScrollView.isHidden = false
     }
 
     func stopBackend() {
@@ -135,6 +164,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         statusLabel.isHidden = true
         detailLabel.isHidden = true
         retryButton.isHidden = true
+        errorLogScrollView.isHidden = true
         webView.isHidden = false
     }
 

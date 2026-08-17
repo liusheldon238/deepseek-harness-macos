@@ -65,6 +65,9 @@ public final class DSHProcessManager {
 
     public var isRunning: Bool { process?.isRunning == true }
     public var logFileURL: URL { logURL }
+    public var latestLog: String {
+        (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+    }
 
     private static func waitUntilHealthy(url: URL, timeout: TimeInterval) async throws -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
