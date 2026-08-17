@@ -1,9 +1,11 @@
 import Foundation
+import Darwin
 
 @MainActor
 public final class DSHProcessManager {
     private var process: Process?
     private var outputHandle: FileHandle?
+    private var processGroupID: pid_t?
     private let logURL: URL
 
     public init(logURL: URL? = nil) {
@@ -20,10 +22,16 @@ public final class DSHProcessManager {
         process.executableURL = runtime.npxURL
         process.arguments = ["--yes", "@deepseek-ai/dsh@0.1.0-rc.6", "web", "--host", "127.0.0.1", "--port", "0"]
         process.environment = ProcessInfo.processInfo.environment.merging(["PATH": runtime.nodeURL.deletingLastPathComponent().path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "")]) { _, new in new }
+        let npmCache = logURL.deletingLastPathComponent().appendingPathComponent("npm-cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: npmCache, withIntermediateDirectories: true)
+        process.environment?["npm_config_cache"] = npmCache.path
+        process.environment?["NPM_CONFIG_CACHE"] = npmCache.path
         process.standardOutput = handle
         process.standardError = handle
         do { try process.run() } catch { throw RuntimeError.processFailed(error.localizedDescription) }
         self.process = process
+        let pid = process.processIdentifier
+        if setpgid(pid, pid) == 0 { processGroupID = pid }
 
         let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
@@ -39,13 +47,16 @@ public final class DSHProcessManager {
     }
 
     public func stop() {
+        if let processGroupID { _ = kill(-processGroupID, SIGTERM) }
         if let process, process.isRunning {
             process.terminate()
             process.waitUntilExit()
         }
+        if let processGroupID { _ = kill(-processGroupID, SIGKILL) }
         try? outputHandle?.close()
         outputHandle = nil
         process = nil
+        self.processGroupID = nil
     }
 
     public var isRunning: Bool { process?.isRunning == true }

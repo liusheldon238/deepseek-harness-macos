@@ -12,6 +12,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     private let retryButton = NSButton(title: "重试", target: nil, action: nil)
     private let webView: WKWebView
     private var started = false
+    private var startupTask: Task<Void, Never>?
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         let configuration = WKWebViewConfiguration()
@@ -81,16 +82,20 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         statusLabel.stringValue = "正在扫描 Node.js…"
         detailLabel.stringValue = "将优先使用本机兼容环境；缺失时自动下载。"
 
-        Task { @MainActor [weak self] in
+        startupTask?.cancel()
+        startupTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let runtime = try await runtimeManager.resolve()
+                try Task.checkCancellation()
                 statusLabel.stringValue = "正在启动 DeepSeek Harness…"
                 detailLabel.stringValue = "Node.js \(runtime.version)（\(runtime.architecture.rawValue)）"
                 let url = try await dshManager.start(using: runtime)
+                try Task.checkCancellation()
                 statusLabel.stringValue = "正在加载 Web UI…"
                 webView.load(URLRequest(url: url))
             } catch {
+                if error is CancellationError { return }
                 showError(error)
             }
         }
@@ -108,6 +113,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     }
 
     func stopBackend() {
+        startupTask?.cancel()
+        startupTask = nil
         dshManager.stop()
     }
 
