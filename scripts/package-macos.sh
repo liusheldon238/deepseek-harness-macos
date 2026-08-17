@@ -21,7 +21,7 @@ rm -rf "$APP_PATH" "$ZIP_PATH" "$DMG_PATH"
 ICON_TMP="$(mktemp -d "${TMPDIR:-/tmp}/deepseek-harness-icon.XXXXXX")"
 trap 'rm -rf "$CACHE_ROOT" "$ICON_TMP"' EXIT
 qlmanage -t -s 1024 -o "$ICON_TMP" "$ROOT_DIR/Resources/deepseek-logo.svg" >/dev/null
-sips --cropToHeightWidth 300 300 --cropOffset 0 0 "$ICON_TMP/deepseek-logo.svg.png" --out "$ICON_TMP/icon.png" >/dev/null
+sips --resampleHeightWidth 1024 1024 "$ICON_TMP/deepseek-logo.svg.png" --out "$ICON_TMP/icon.png" >/dev/null
 ICONSET="$ICON_TMP/AppIcon.iconset"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
