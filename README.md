@@ -1,5 +1,9 @@
 # DeepSeek Harness Desktop
 
+<p align="center">
+  <img src="Resources/deepseek-logo.svg" alt="DeepSeek" width="360">
+</p>
+
 Native macOS shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). It starts the local DSH Web UI in the background and displays it inside a native `WKWebView` window.
 
 ## What it does

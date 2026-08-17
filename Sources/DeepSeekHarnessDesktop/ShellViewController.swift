@@ -6,6 +6,7 @@ import WebKit
 final class ShellViewController: NSViewController, WKNavigationDelegate {
     private let runtimeManager = NodeRuntimeManager()
     private let dshManager = DSHProcessManager()
+    private let logoView = NSImageView()
     private let statusLabel = NSTextField(labelWithString: "正在准备环境…")
     private let detailLabel = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
@@ -32,7 +33,17 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.isHidden = true
 
-        let status = NSStackView(views: [statusLabel, detailLabel, progress, retryButton])
+        if let logoURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let image = NSImage(contentsOf: logoURL) {
+            logoView.image = image
+        }
+        logoView.imageScaling = .scaleProportionallyUpOrDown
+        logoView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            logoView.widthAnchor.constraint(equalToConstant: 96),
+            logoView.heightAnchor.constraint(equalToConstant: 96)
+        ])
+
+        let status = NSStackView(views: [logoView, statusLabel, detailLabel, progress, retryButton])
         status.orientation = .vertical
         status.alignment = .centerX
         status.spacing = 12
