@@ -25,7 +25,7 @@ swift test
 open "build/DeepSeek Harness.app"
 ```
 
-The package script creates an ad-hoc signed app and `build/DeepSeek-Harness-Desktop-0.0.1-macos.zip`. An Apple Developer signing identity is required for a notarized distribution; otherwise macOS may require a one-time manual approval on first launch.
+The package script creates an ad-hoc signed app, a ZIP, and a drag-to-Applications DMG at `build/DeepSeek-Harness-Desktop-0.0.1-macos.dmg`. The app icon is derived from the official DeepSeek logo asset in [deepseek-ai/DeepSeek-V2](https://github.com/deepseek-ai/DeepSeek-V2/blob/main/figures/logo.svg). An Apple Developer signing identity is required for a notarized distribution; otherwise macOS may require a one-time manual approval on first launch.
 
 ## Development
 
