@@ -10,8 +10,10 @@
 	<string>DeepSeekHarnessDesktop</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon.icns</string>
-	<key>CFBundleIconName</key>
-	<string>AppIcon</string>
+	<key>CFBundleIconFiles</key>
+	<array>
+		<string>AppIcon.icns</string>
+	</array>
 	<key>CFBundleIdentifier</key>
 	<string>com.liusheldon238.deepseek-harness-macos</string>
 	<key>CFBundleInfoDictionaryVersion</key>
