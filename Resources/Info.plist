@@ -8,6 +8,8 @@
 	<string>DeepSeek Harness Desktop</string>
 	<key>CFBundleExecutable</key>
 	<string>DeepSeekHarnessDesktop</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.liusheldon238.deepseek-harness-macos</string>
 	<key>CFBundleInfoDictionaryVersion</key>
