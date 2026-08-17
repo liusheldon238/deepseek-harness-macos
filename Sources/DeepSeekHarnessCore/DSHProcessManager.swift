@@ -33,7 +33,10 @@ public final class DSHProcessManager {
         let pid = process.processIdentifier
         if setpgid(pid, pid) == 0 { processGroupID = pid }
 
-        let deadline = Date().addingTimeInterval(90)
+        // The first launch can install several hundred MB of DSH dependencies
+        // into the app-local npm cache. Keep the process alive long enough for
+        // that one-time provisioning to finish.
+        let deadline = Date().addingTimeInterval(300)
         while Date() < deadline {
             if let output = try? String(contentsOf: logURL, encoding: .utf8), let url = DSHOutputParser.url(from: output) {
                 if try await Self.waitUntilHealthy(url: url, timeout: 30) { return url }
@@ -43,7 +46,8 @@ public final class DSHProcessManager {
         }
         let output = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
         stop()
-        throw RuntimeError.dshDidNotStart(output.suffix(600).description)
+        let detail = output.isEmpty ? "首次启动可能仍在下载 DSH 依赖，请点击“重试”。" : output.suffix(600).description
+        throw RuntimeError.dshDidNotStart(detail)
     }
 
     public func stop() {
