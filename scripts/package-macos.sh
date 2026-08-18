@@ -35,6 +35,7 @@ mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_PATH" "$APP_PATH/Contents/MacOS/DeepSeekHarnessDesktop"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
 cp "$ICON_TMP/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
+cp -R "$ROOT_DIR/Resources/dsh-agent-preset-advisor" "$APP_PATH/Contents/Resources/dsh-agent-preset-advisor"
 chmod 0755 "$APP_PATH/Contents/MacOS/DeepSeekHarnessDesktop"
 
 codesign --force --deep --sign - "$APP_PATH"

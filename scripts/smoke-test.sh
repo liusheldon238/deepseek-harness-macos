@@ -6,6 +6,8 @@ APP_PATH="$ROOT_DIR/build/DeepSeek Harness.app"
 URL="http://127.0.0.1:3080"
 
 test -x "$APP_PATH/Contents/MacOS/DeepSeekHarnessDesktop"
+test -f "$APP_PATH/Contents/Resources/dsh-agent-preset-advisor/package.json"
+test -f "$APP_PATH/Contents/Resources/dsh-agent-preset-advisor/client.js"
 plutil -lint "$APP_PATH/Contents/Info.plist"
 codesign --verify --deep --strict "$APP_PATH"
 

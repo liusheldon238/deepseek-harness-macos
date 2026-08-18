@@ -4,6 +4,7 @@ import Darwin
 @MainActor
 public final class DSHProcessManager {
     public static let marketPackage = "dshmarket@1.13.1"
+    public static let presetAdvisorPackage = "dsh-agent-preset-advisor@0.1.0"
     private var process: Process?
     private var outputHandle: FileHandle?
     private var processGroupID: pid_t?
@@ -88,18 +89,23 @@ public final class DSHProcessManager {
     private func ensureMarketPlugin(using runtime: NodeRuntime, environment: [String: String], output: FileHandle) async throws {
         let supportURL = logURL.deletingLastPathComponent()
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
+        try await installPluginIfNeeded(Self.marketPackage, packageName: "dshmarket", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output)
+        guard let advisorURL = Bundle.main.resourceURL?.appendingPathComponent("dsh-agent-preset-advisor", isDirectory: true),
+              FileManager.default.fileExists(atPath: advisorURL.appendingPathComponent("package.json").path) else { return }
+        try await installPluginIfNeeded("file:\(advisorURL.path)", packageName: "dsh-agent-preset-advisor", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output)
+    }
+
+    private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle) async throws {
         let manifestURL = profileDirectory.appendingPathComponent("package.json")
         if let data = try? Data(contentsOf: manifestURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let dependencies = json["dependencies"] as? [String: Any],
-           dependencies["dshmarket"] != nil,
-           FileManager.default.fileExists(atPath: profileDirectory.appendingPathComponent("node_modules/dshmarket").path) {
-            return
-        }
+           dependencies[packageName] != nil,
+           FileManager.default.fileExists(atPath: profileDirectory.appendingPathComponent("node_modules/\(packageName)").path) { return }
 
         let process = Process()
         process.executableURL = runtime.npxURL
-        process.arguments = ["--yes", "@deepseek-ai/dsh@0.1.0-rc.6", "plugin", "--profile", "web", "add", Self.marketPackage]
+        process.arguments = ["--yes", "@deepseek-ai/dsh@0.1.0-rc.6", "plugin", "--profile", "web", "add", packageSpec]
         process.environment = environment
         process.standardOutput = output
         process.standardError = output
@@ -112,7 +118,7 @@ public final class DSHProcessManager {
             throw RuntimeError.pluginInstallFailed(error.localizedDescription)
         }
         guard process.terminationStatus == 0 else {
-            throw RuntimeError.pluginInstallFailed("pnpm 退出码 \(process.terminationStatus)，请查看上方内嵌日志后重试。")
+            throw RuntimeError.pluginInstallFailed("安装 \(packageName) 失败，pnpm 退出码 \(process.terminationStatus)。请查看上方内嵌日志后重试。")
         }
     }
 
