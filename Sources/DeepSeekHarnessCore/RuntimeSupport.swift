@@ -77,6 +77,7 @@ public enum RuntimeError: LocalizedError, Sendable {
     case extractionFailed(String)
     case missingExecutable(URL)
     case processFailed(String)
+    case pluginInstallFailed(String)
     case dshDidNotStart(String)
 
     public var errorDescription: String {
@@ -88,6 +89,7 @@ public enum RuntimeError: LocalizedError, Sendable {
         case .extractionFailed(let detail): return "Node.js 解压失败：\(detail)"
         case .missingExecutable(let url): return "缺少可执行文件：\(url.path)"
         case .processFailed(let detail): return "进程启动失败：\(detail)"
+        case .pluginInstallFailed(let detail): return "dsh-market 安装失败：\(detail)"
         case .dshDidNotStart(let detail): return "DeepSeek Harness 未能启动：\(detail)"
         }
     }

@@ -13,10 +13,13 @@ Native macOS shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 - Downloads Node.js `22.23.1` for Apple Silicon or Intel when the local environment is missing or incompatible.
 - Verifies the official Node archive SHA-256 before extraction.
 - Starts `@deepseek-ai/dsh@0.1.0-rc.6` on loopback with an OS-selected free port.
+- Initializes the app-owned web profile and installs `dshmarket@1.13.1` on first launch, so the DSH Web UI includes a plugin marketplace for browsing, installing, updating, disabling, and removing other plugins.
 - Waits for an HTTP 200 response before loading the page in the app window.
 - Stops the DSH child process when the app exits.
 
 Runtime files are stored in `~/Library/Application Support/DeepSeek Harness Desktop/`. No administrator access is required.
+
+The isolated DSH profile is stored below `dsh-home/profiles/web`; it does not modify the user's default `~/.dsh` profile. The market package is installed idempotently and is only downloaded once.
 
 ## Build
 

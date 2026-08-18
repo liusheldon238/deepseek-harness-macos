@@ -3,6 +3,7 @@ import Darwin
 
 @MainActor
 public final class DSHProcessManager {
+    public static let marketPackage = "dshmarket@1.13.1"
     private var process: Process?
     private var outputHandle: FileHandle?
     private var processGroupID: pid_t?
@@ -18,14 +19,12 @@ public final class DSHProcessManager {
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: logURL)
         outputHandle = handle
+        let environment = try installEnvironment(using: runtime)
+        try await ensureMarketPlugin(using: runtime, environment: environment, output: handle)
         let process = Process()
         process.executableURL = runtime.npxURL
         process.arguments = ["--yes", "@deepseek-ai/dsh@0.1.0-rc.6", "web", "--host", "127.0.0.1", "--port", "0"]
-        process.environment = ProcessInfo.processInfo.environment.merging(["PATH": runtime.nodeURL.deletingLastPathComponent().path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "")]) { _, new in new }
-        let npmCache = logURL.deletingLastPathComponent().appendingPathComponent("npm-cache", isDirectory: true)
-        try FileManager.default.createDirectory(at: npmCache, withIntermediateDirectories: true)
-        process.environment?["npm_config_cache"] = npmCache.path
-        process.environment?["NPM_CONFIG_CACHE"] = npmCache.path
+        process.environment = environment
         process.standardOutput = handle
         process.standardError = handle
         do { try process.run() } catch { throw RuntimeError.processFailed(error.localizedDescription) }
@@ -67,6 +66,54 @@ public final class DSHProcessManager {
     public var logFileURL: URL { logURL }
     public var latestLog: String {
         (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+    }
+
+    private func installEnvironment(using runtime: NodeRuntime) throws -> [String: String] {
+        let supportURL = logURL.deletingLastPathComponent()
+        let npmCache = supportURL.appendingPathComponent("npm-cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: npmCache, withIntermediateDirectories: true)
+        let nodeDirectory = runtime.nodeURL.deletingLastPathComponent().path
+        let pnpmDirectory = ["/opt/homebrew/bin", "/usr/local/bin", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/pnpm").path]
+            .first { FileManager.default.isExecutableFile(atPath: URL(fileURLWithPath: $0).appendingPathComponent("pnpm").path) }
+        let inheritedPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        let path = ([pnpmDirectory, nodeDirectory] + inheritedPath.split(separator: ":").map(String.init)).compactMap { $0 }.joined(separator: ":")
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = path
+        environment["DSH_HOME"] = supportURL.appendingPathComponent("dsh-home", isDirectory: true).path
+        environment["npm_config_cache"] = npmCache.path
+        environment["NPM_CONFIG_CACHE"] = npmCache.path
+        return environment
+    }
+
+    private func ensureMarketPlugin(using runtime: NodeRuntime, environment: [String: String], output: FileHandle) async throws {
+        let supportURL = logURL.deletingLastPathComponent()
+        let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
+        let manifestURL = profileDirectory.appendingPathComponent("package.json")
+        if let data = try? Data(contentsOf: manifestURL),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let dependencies = json["dependencies"] as? [String: Any],
+           dependencies["dshmarket"] != nil,
+           FileManager.default.fileExists(atPath: profileDirectory.appendingPathComponent("node_modules/dshmarket").path) {
+            return
+        }
+
+        let process = Process()
+        process.executableURL = runtime.npxURL
+        process.arguments = ["--yes", "@deepseek-ai/dsh@0.1.0-rc.6", "plugin", "--profile", "web", "add", Self.marketPackage]
+        process.environment = environment
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                process.terminationHandler = { _ in continuation.resume() }
+            }
+        } catch {
+            throw RuntimeError.pluginInstallFailed(error.localizedDescription)
+        }
+        guard process.terminationStatus == 0 else {
+            throw RuntimeError.pluginInstallFailed("pnpm 退出码 \(process.terminationStatus)，请查看上方内嵌日志后重试。")
+        }
     }
 
     private static func waitUntilHealthy(url: URL, timeout: TimeInterval) async throws -> Bool {
