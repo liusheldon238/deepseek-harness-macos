@@ -80,16 +80,16 @@ window.__ModuleLoader__.load({
       const preferred = kind.id === "cordis" ? ["cordis", "standard"] : kind.id === "code" ? ["code", "standard"] : kind.id === "writing" || kind.id === "research" || kind.id === "data" ? ["standard", "code"] : ["standard", "code", "minimal"];
       return preferred.map((id) => healthy.find((p) => p.id === id)).find(Boolean) || healthy[0];
     }
-    function analyze(input, presets, locale) {
+    function analyze(input, presets, locale, currentIdOverride) {
       const clean = input.trim().replace(/\s+/g, " ");
       const kind = classify(clean);
       const suggested = recommend(kind, presets);
-      const current = presets.find((p) => p.isDefault) || presets[0];
+      const current = (currentIdOverride && presets.find((p) => p.id === currentIdOverride)) || presets.find((p) => p.isDefault) || presets[0];
       if (!suggested || !current) return { kind, summary: clean.slice(0, 180), current: null, suggested: null, fit: true };
       return { kind, summary: clean.slice(0, 180), current: textOf(current, locale), suggested: textOf(suggested, locale), suggestedId: suggested.id, currentId: current.id, fit: suggested.id === current.id };
     }
     const card = { border: "1px solid var(--dsh-border, #d9dde5)", borderRadius: 12, padding: 14, background: "var(--dsh-surface, #fff)" };
-    function AdvisorView({ api, t, locale, compact = false, initialTask = "" }) {
+    function AdvisorView({ api, t, locale, compact = false, initialTask = "", currentIdOverride }) {
       const [task, setTask] = useState(initialTask);
       const [presets, setPresets] = useState([]);
       const [result, setResult] = useState(null);
@@ -97,7 +97,7 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = useState("");
       useEffect(() => { setTask(initialTask); }, [initialTask]);
       useEffect(() => { api.agentPresets.list({}).then((r) => r.result.ok ? setPresets(r.result.value.presets || []) : setError(r.result.error.message)).catch((e) => setError(String(e))); }, [api]);
-      const run = () => { if (!task.trim()) { setError(t("empty")); return; } setError(""); setResult(analyze(task, presets, locale)); };
+      const run = () => { if (!task.trim()) { setError(t("empty")); return; } setError(""); setResult(analyze(task, presets, locale, currentIdOverride)); };
       const apply = async (id) => { setSaving(id); try { const r = await api.settings.update({ ns: "agent-presets", patch: { default: id } }); if (r.result.ok) { setPresets((all) => all.map((p) => ({ ...p, isDefault: p.id === id }))); setResult((old) => old ? { ...old, currentId: id, fit: true } : old); } else setError(r.result.error.message); } catch (e) { setError(String(e)); } finally { setSaving(""); } };
       return h("div", { "data-dsh-preset-advisor": "panel", style: { display: "grid", gap: 12, maxWidth: compact ? 520 : 760, padding: compact ? 8 : 18 } },
         !compact && h("div", null, h("h2", { style: { margin: "0 0 6px", fontSize: 20 } }, t("title")), h("p", { style: { margin: 0, opacity: .72 } }, t("intro"))),
@@ -120,14 +120,14 @@ window.__ModuleLoader__.load({
       ctx.effect(() => ctx.locale.register("settings.presetAdvisor", { zh, en }), "preset-advisor: locale");
       ctx.slots.inject("settings.section", () => ctx.slots.register({ name: "settings.section", id: "preset-advisor", order: 35, label: () => ctx.locale.bind("settings.presetAdvisor")(locale === "zh" ? "nav" : "nav"), locale: "settings.presetAdvisor", inject: () => ({ api, locale }) }, (props) => h(AdvisorView, { ...props, t: (key) => (props.t ? props.t(key) : (locale === "zh" ? zh[key] : en[key])), api, locale })));
       ctx.inject(["slots", "conversation"], (scope) => {
-        function OverlayAdvisor({ api, locale }) {
+        function OverlayAdvisor({ api, locale, currentId }) {
           const [open, setOpen] = useState(false);
           const [draft, setDraft] = useState("");
           const copy = locale === "zh" ? zh : en;
           if (!open) return h("button", { type: "button", title: copy.overlayHint, onClick: () => { setDraft(document.querySelector("textarea")?.value || ""); setOpen(true); }, style: { border: "1px solid var(--dsh-border, #d9dde5)", borderRadius: 7, padding: "5px 8px", background: "transparent", cursor: "pointer", fontSize: 12 } }, copy.overlay);
-          return h("div", { style: { border: "1px solid var(--dsh-border, #d9dde5)", borderRadius: 10, background: "var(--dsh-surface, #fff)", boxShadow: "0 8px 24px rgba(0,0,0,.12)" } }, h("button", { type: "button", onClick: () => setOpen(false), style: { float: "right", margin: 8, border: 0, background: "transparent", cursor: "pointer" } }, "×"), h(AdvisorView, { api, locale, compact: true, initialTask: draft, t: (key) => copy[key] }));
+          return h("div", { style: { border: "1px solid var(--dsh-border, #d9dde5)", borderRadius: 10, background: "var(--dsh-surface, #fff)", boxShadow: "0 8px 24px rgba(0,0,0,.12)" } }, h("button", { type: "button", onClick: () => setOpen(false), style: { float: "right", margin: 8, border: 0, background: "transparent", cursor: "pointer" } }, "×"), h(AdvisorView, { api, locale, compact: true, initialTask: draft, currentIdOverride: currentId, t: (key) => copy[key] }));
         }
-        scope.slots.inject("conversation.input.overlay", () => scope.slots.register({ name: "conversation.input.overlay", id: "preset-advisor", order: 2, locale: "settings.presetAdvisor", inject: () => ({ api, locale }) }, OverlayAdvisor));
+        scope.slots.inject("conversation.input.overlay", () => scope.slots.register({ name: "conversation.input.overlay", id: "preset-advisor", order: 2, locale: "settings.presetAdvisor", inject: (sessionId) => ({ api, locale, currentId: scope.sessions.list.getSnapshot().byId[sessionId]?.agentPreset }) }, OverlayAdvisor));
       });
       ctx.effect(() => { const onAnalyze = (event) => { const task = event.detail || ""; if (!task.trim()) return; const panel = document.querySelector('[data-dsh-preset-advisor="panel"]'); if (panel) panel.scrollIntoView({ behavior: "smooth", block: "center" }); }; document.addEventListener("dsh-preset-advisor", onAnalyze); return () => document.removeEventListener("dsh-preset-advisor", onAnalyze); }, "preset-advisor: composer bridge");
     }

@@ -6,6 +6,7 @@ public final class DSHProcessManager {
     public static let marketPackage = "dshmarket@1.13.1"
     public static let presetAdvisorPackage = "dsh-agent-preset-advisor@0.1.0"
     private var process: Process?
+    private var provisioningProcess: Process?
     private var outputHandle: FileHandle?
     private var processGroupID: pid_t?
     private let logURL: URL
@@ -19,6 +20,7 @@ public final class DSHProcessManager {
         try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: logURL)
+        try handle.truncate(atOffset: 0)
         outputHandle = handle
         let environment = try installEnvironment(using: runtime)
         try await ensureMarketPlugin(using: runtime, environment: environment, output: handle)
@@ -51,6 +53,11 @@ public final class DSHProcessManager {
     }
 
     public func stop() {
+        if let provisioningProcess, provisioningProcess.isRunning {
+            provisioningProcess.terminate()
+            provisioningProcess.waitUntilExit()
+        }
+        self.provisioningProcess = nil
         if let processGroupID { _ = kill(-processGroupID, SIGTERM) }
         if let process, process.isRunning {
             process.terminate()
@@ -90,8 +97,11 @@ public final class DSHProcessManager {
         let supportURL = logURL.deletingLastPathComponent()
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
         try await installPluginIfNeeded(Self.marketPackage, packageName: "dshmarket", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output)
-        guard let advisorURL = Bundle.main.resourceURL?.appendingPathComponent("dsh-agent-preset-advisor", isDirectory: true),
-              FileManager.default.fileExists(atPath: advisorURL.appendingPathComponent("package.json").path) else { return }
+        let bundledAdvisor = Bundle.main.resourceURL?.appendingPathComponent("dsh-agent-preset-advisor", isDirectory: true)
+        let developmentAdvisor = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/dsh-agent-preset-advisor", isDirectory: true)
+        guard let advisorURL = [bundledAdvisor, developmentAdvisor].compactMap({ $0 }).first(where: {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("package.json").path)
+        }) else { return }
         try await installPluginIfNeeded("file:\(advisorURL.path)", packageName: "dsh-agent-preset-advisor", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output)
     }
 
@@ -109,6 +119,7 @@ public final class DSHProcessManager {
         process.environment = environment
         process.standardOutput = output
         process.standardError = output
+        provisioningProcess = process
         do {
             try process.run()
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -117,6 +128,7 @@ public final class DSHProcessManager {
         } catch {
             throw RuntimeError.pluginInstallFailed(error.localizedDescription)
         }
+        provisioningProcess = nil
         guard process.terminationStatus == 0 else {
             throw RuntimeError.pluginInstallFailed("安装 \(packageName) 失败，pnpm 退出码 \(process.terminationStatus)。请查看上方内嵌日志后重试。")
         }
