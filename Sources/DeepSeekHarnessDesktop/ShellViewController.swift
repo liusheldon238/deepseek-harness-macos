@@ -34,6 +34,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         webView.navigationDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.isHidden = true
+        logoView.isHidden = false
 
         if let logoURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let image = NSImage(contentsOf: logoURL) {
             logoView.image = image
@@ -126,6 +127,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
                 // the page while secondary assets finish loading.
                 progress.stopAnimation(nil)
                 progress.isHidden = true
+                logoView.isHidden = true
                 statusLabel.isHidden = true
                 detailLabel.isHidden = true
                 retryButton.isHidden = true
