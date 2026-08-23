@@ -228,6 +228,9 @@ public final class SelfHealingStartup {
         progress(.dsh, "Node.js \(runtime.version)（\(runtime.architecture.rawValue)）")
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
         let snapshotsDirectory = supportURL.appendingPathComponent("snapshots", isDirectory: true)
+        if try ProfileTransaction.recoverPending(profileDirectory: profileDirectory, snapshotsDirectory: snapshotsDirectory, fileManager: fileManager) {
+            processManager.appendDiagnostic("检测到上次启动中断，已从事务快照恢复 DSH profile。")
+        }
         var transaction = try ProfileTransaction.begin(profileDirectory: profileDirectory, snapshotsDirectory: snapshotsDirectory, fileManager: fileManager)
         var rolledBack = false
         let dshPackage = await latestDSHPackage() ?? Self.fallbackDSHPackage

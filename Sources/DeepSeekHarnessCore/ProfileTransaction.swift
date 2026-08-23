@@ -28,6 +28,41 @@ public struct ProfileTransaction {
         )
     }
 
+    @discardableResult
+    public static func recoverPending(
+        profileDirectory: URL,
+        snapshotsDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws -> Bool {
+        guard fileManager.fileExists(atPath: snapshotsDirectory.path) else { return false }
+        let entries = try fileManager.contentsOfDirectory(
+            at: snapshotsDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ).filter { url in
+            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        guard !entries.isEmpty else { return false }
+        let candidate = entries.min { lhs, rhs in
+            let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return left < right
+        }!
+        let profileExisted = fileManager.fileExists(atPath: candidate.appendingPathComponent("profile", isDirectory: true).path)
+        let transaction = ProfileTransaction(
+            directory: candidate,
+            profileDirectory: profileDirectory,
+            profileExisted: profileExisted,
+            snapshotsDirectory: snapshotsDirectory,
+            fileManager: fileManager
+        )
+        try transaction.restore()
+        for entry in try fileManager.contentsOfDirectory(at: snapshotsDirectory, includingPropertiesForKeys: nil) {
+            try fileManager.removeItem(at: entry)
+        }
+        return true
+    }
+
     public func restore() throws {
         let parent = profileDirectory.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)

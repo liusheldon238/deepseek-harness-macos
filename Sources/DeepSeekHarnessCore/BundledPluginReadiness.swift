@@ -64,8 +64,18 @@ public enum BundledPluginReadiness {
     }
 
     private static func dependency(_ installed: String, matches expected: String) -> Bool {
-        if expected.hasPrefix("file:") { return installed.hasPrefix("file:") }
+        if expected.hasPrefix("file:") {
+            guard installed.hasPrefix("file:") else { return false }
+            return normalizedFilePath(installed) == normalizedFilePath(expected)
+        }
         return !installed.hasPrefix("file:")
+    }
+
+    private static func normalizedFilePath(_ spec: String) -> String {
+        let raw = String(spec.dropFirst("file:".count))
+        let decoded = raw.removingPercentEncoding ?? raw
+        guard decoded.hasPrefix("/") else { return decoded }
+        return URL(fileURLWithPath: decoded).standardizedFileURL.path
     }
 
     private static func object(at url: URL) -> [String: Any]? {

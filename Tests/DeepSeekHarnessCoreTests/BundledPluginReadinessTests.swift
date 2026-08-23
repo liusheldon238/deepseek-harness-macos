@@ -42,6 +42,12 @@ final class BundledPluginReadinessTests: XCTestCase {
         XCTAssertFalse(BundledPluginReadiness.needsInstall(descriptor, in: profile))
     }
 
+    func testFileDependencyAtDifferentPathTriggersReinstall() throws {
+        let profile = try makeProfile(dependency: "file:/old-app/Resources/dsh-model-provider")
+
+        XCTAssertTrue(BundledPluginReadiness.needsInstall(descriptor, in: profile))
+    }
+
     func testMissingManifestDependencyTriggersReinstall() throws {
         let profile = try makeProfile(dependency: nil)
 
