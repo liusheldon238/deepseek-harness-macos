@@ -4,8 +4,8 @@ import WebKit
 
 @MainActor
 final class ShellViewController: NSViewController, WKNavigationDelegate {
-    private let runtimeManager = NodeRuntimeManager()
     private let dshManager = DSHProcessManager()
+    private lazy var startupManager = SelfHealingStartup(processManager: dshManager)
     private let logoView = NSImageView()
     private let statusLabel = NSTextField(labelWithString: "正在准备环境…")
     private let detailLabel = NSTextField(labelWithString: "")
@@ -107,7 +107,13 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         retryButton.isHidden = true
         progress.isHidden = false
         progress.startAnimation(nil)
+        webView.stopLoading()
         webView.isHidden = true
+        logoView.isHidden = false
+        statusLabel.isHidden = false
+        detailLabel.isHidden = false
+        errorLogScrollView.isHidden = true
+        errorLogView.string = ""
         statusLabel.stringValue = "正在扫描 Node.js…"
         detailLabel.stringValue = "将优先使用本机兼容环境；缺失时自动下载。"
 
@@ -115,12 +121,13 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         startupTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let runtime = try await runtimeManager.resolve()
+                let (url, report) = try await startupManager.start { [weak self] phase, detail in
+                    guard let self else { return }
+                    statusLabel.stringValue = phase.rawValue
+                    detailLabel.stringValue = detail
+                }
                 try Task.checkCancellation()
-                statusLabel.stringValue = "正在启动 DeepSeek Harness…"
-                detailLabel.stringValue = "Node.js \(runtime.version)（\(runtime.architecture.rawValue)）"
-                let url = try await dshManager.start(using: runtime)
-                try Task.checkCancellation()
+                detailLabel.stringValue = "Node.js \(report.runtime.version)（\(report.runtime.architecture.rawValue)）"
                 statusLabel.stringValue = "正在加载 Web UI…"
                 // DSH has already passed its HTTP health check. Reveal the
                 // WebView immediately so the launch logo cannot remain over
@@ -142,6 +149,9 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     }
 
     private func showError(_ error: Error) {
+        webView.stopLoading()
+        webView.isHidden = true
+        logoView.isHidden = false
         progress.stopAnimation(nil)
         progress.isHidden = true
         retryButton.isHidden = false
@@ -158,6 +168,25 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         startupTask?.cancel()
         startupTask = nil
         dshManager.stop()
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        if url.scheme == "about" {
+            decisionHandler(.allow)
+            return
+        }
+        guard url.host == "127.0.0.1" else {
+            if let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) {
+                NSWorkspace.shared.open(url)
+            }
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

@@ -15,22 +15,31 @@ public final class DSHProcessManager {
         self.logURL = logURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("DeepSeek Harness Desktop/dsh.log")
     }
 
-    public func start(using runtime: NodeRuntime) async throws -> URL {
+    public func start(using runtime: NodeRuntime, dshPackage: String = "@deepseek-ai/dsh@0.1.0-rc.6") async throws -> URL {
         stop()
         try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: logURL)
         try handle.truncate(atOffset: 0)
         outputHandle = handle
-        let environment = try installEnvironment(using: runtime)
-        try await ensureMarketPlugin(using: runtime, environment: environment, output: handle)
+        let environment: [String: String]
+        do {
+            environment = try installEnvironment(using: runtime)
+        try await ensureMarketPlugin(using: runtime, environment: environment, output: handle, dshPackage: dshPackage)
+        } catch {
+            stop()
+            throw error
+        }
         let process = Process()
         process.executableURL = runtime.npxURL
-        process.arguments = ["--yes", "@deepseek-ai/dsh@0.1.0-rc.6", "web", "--host", "127.0.0.1", "--port", "0"]
+        process.arguments = ["--yes", dshPackage, "web", "--host", "127.0.0.1", "--port", "0"]
         process.environment = environment
         process.standardOutput = handle
         process.standardError = handle
-        do { try process.run() } catch { throw RuntimeError.processFailed(error.localizedDescription) }
+        do { try process.run() } catch {
+            stop()
+            throw RuntimeError.processFailed(error.localizedDescription)
+        }
         self.process = process
         let pid = process.processIdentifier
         if setpgid(pid, pid) == 0 { processGroupID = pid }
@@ -41,13 +50,21 @@ public final class DSHProcessManager {
         let deadline = Date().addingTimeInterval(300)
         while Date() < deadline {
             if let output = try? String(contentsOf: logURL, encoding: .utf8), let url = DSHOutputParser.url(from: output) {
-                if try await Self.waitUntilHealthy(url: url, timeout: 30) { return url }
+                do {
+                    if try await Self.waitUntilHealthy(url: url, timeout: 30) { return url }
+                } catch let error as RuntimeError {
+                    stop()
+                    throw error
+                }
             }
             if !process.isRunning { break }
             try? await Task.sleep(for: .milliseconds(200))
         }
         let output = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
         stop()
+        if let conflict = Self.pluginConflictDetail(in: output) {
+            throw RuntimeError.pluginConflict(conflict)
+        }
         let detail = output.isEmpty ? "首次启动可能仍在下载 DSH 依赖，请点击“重试”。" : output.suffix(600).description
         throw RuntimeError.dshDidNotStart(detail)
     }
@@ -93,39 +110,45 @@ public final class DSHProcessManager {
         return environment
     }
 
-    private func ensureMarketPlugin(using runtime: NodeRuntime, environment: [String: String], output: FileHandle) async throws {
+    private func ensureMarketPlugin(using runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String) async throws {
         let supportURL = logURL.deletingLastPathComponent()
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
-        try await installPluginIfNeeded(Self.marketPackage, packageName: "dshmarket", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output)
+        try await installPluginIfNeeded(Self.marketPackage, packageName: "dshmarket", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage)
         let bundledAdvisor = Bundle.main.resourceURL?.appendingPathComponent("dsh-agent-preset-advisor", isDirectory: true)
         let developmentAdvisor = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/dsh-agent-preset-advisor", isDirectory: true)
         guard let advisorURL = [bundledAdvisor, developmentAdvisor].compactMap({ $0 }).first(where: {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent("package.json").path)
         }) else { return }
-        try await installPluginIfNeeded("file:\(advisorURL.path)", packageName: "dsh-agent-preset-advisor", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output)
+        try await installPluginIfNeeded("file:\(advisorURL.path)", packageName: "dsh-agent-preset-advisor", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage)
     }
 
-    private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle) async throws {
+    private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String) async throws {
         let manifestURL = profileDirectory.appendingPathComponent("package.json")
         if let data = try? Data(contentsOf: manifestURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let dependencies = json["dependencies"] as? [String: Any],
-           dependencies[packageName] != nil,
+           let installedSpec = dependencies[packageName] as? String,
+           (!packageSpec.hasPrefix("file:") || installedSpec == packageSpec),
            FileManager.default.fileExists(atPath: profileDirectory.appendingPathComponent("node_modules/\(packageName)").path) { return }
 
         let process = Process()
         process.executableURL = runtime.npxURL
-        process.arguments = ["--yes", "@deepseek-ai/dsh@0.1.0-rc.6", "plugin", "--profile", "web", "add", packageSpec]
+        process.arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", packageSpec]
         process.environment = environment
         process.standardOutput = output
         process.standardError = output
         provisioningProcess = process
         do {
-            try process.run()
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 process.terminationHandler = { _ in continuation.resume() }
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         } catch {
+            provisioningProcess = nil
             throw RuntimeError.pluginInstallFailed(error.localizedDescription)
         }
         provisioningProcess = nil
@@ -138,11 +161,31 @@ public final class DSHProcessManager {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             do {
-                let (_, response) = try await URLSession.shared.data(from: url)
-                if (response as? HTTPURLResponse)?.statusCode == 200 { return true }
+                let (data, response) = try await URLSession.shared.data(from: url)
+                if (response as? HTTPURLResponse)?.statusCode == 200 {
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    if body.contains("Failed to load plugins") || body.contains("web boot:") {
+                        let detail = body.split(separator: "\n").first(where: { $0.contains("dsh-") || $0.contains("plugin") }) ?? "Web 插件启动失败"
+                        throw RuntimeError.pluginConflict(String(detail).trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                    return true
+                }
+            } catch let error as RuntimeError {
+                // Preserve the structured conflict signal for the self-healing
+                // coordinator; swallowing it would turn a repairable plugin
+                // failure into an opaque timeout.
+                throw error
             } catch { }
             try? await Task.sleep(for: .milliseconds(250))
         }
         return false
+    }
+
+    private static func pluginConflictDetail(in output: String) -> String? {
+        guard output.contains("Failed to load plugins") || output.contains("web boot:") else { return nil }
+        return output.split(separator: "\n")
+            .first(where: { $0.contains("dsh-") || $0.localizedCaseInsensitiveContains("plugin") })
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            ?? "Web 插件启动失败"
     }
 }

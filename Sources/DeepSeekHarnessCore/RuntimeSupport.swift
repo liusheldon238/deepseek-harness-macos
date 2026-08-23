@@ -7,7 +7,7 @@ public struct SemVer: Comparable, Sendable, CustomStringConvertible {
     public let patch: Int
 
     public init(_ value: String) throws {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "^v", with: "", options: .regularExpression)
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "^v", with: "", options: [.regularExpression, .caseInsensitive])
         let parts = normalized.split(separator: ".")
         guard parts.count == 3,
               let major = Int(parts[0]), let minor = Int(parts[1]), let patch = Int(parts[2]),
@@ -26,7 +26,7 @@ public struct SemVer: Comparable, Sendable, CustomStringConvertible {
     }
 }
 
-public enum NodeArchitecture: String, Sendable {
+public enum NodeArchitecture: String, Sendable, Equatable {
     case arm64
     case x64
 
@@ -78,6 +78,7 @@ public enum RuntimeError: LocalizedError, Sendable {
     case missingExecutable(URL)
     case processFailed(String)
     case pluginInstallFailed(String)
+    case pluginConflict(String)
     case dshDidNotStart(String)
 
     public var errorDescription: String {
@@ -89,7 +90,8 @@ public enum RuntimeError: LocalizedError, Sendable {
         case .extractionFailed(let detail): return "Node.js 解压失败：\(detail)"
         case .missingExecutable(let url): return "缺少可执行文件：\(url.path)"
         case .processFailed(let detail): return "进程启动失败：\(detail)"
-        case .pluginInstallFailed(let detail): return "dsh-market 安装失败：\(detail)"
+        case .pluginInstallFailed(let detail): return "插件安装失败：\(detail)"
+        case .pluginConflict(let detail): return "插件冲突：\(detail)"
         case .dshDidNotStart(let detail): return "DeepSeek Harness 未能启动：\(detail)"
         }
     }
@@ -109,8 +111,10 @@ public struct NodeRuntime: Sendable {
 
     public init(nodeURL: URL, version: SemVer, architecture: NodeArchitecture) throws {
         let npxURL = nodeURL.deletingLastPathComponent().appendingPathComponent("npx")
-        guard FileManager.default.isExecutableFile(atPath: nodeURL.path), FileManager.default.isExecutableFile(atPath: npxURL.path) else {
-            throw RuntimeError.missingExecutable(npxURL)
+        let nodeIsMissing = !FileManager.default.isExecutableFile(atPath: nodeURL.path)
+        let npxIsMissing = !FileManager.default.isExecutableFile(atPath: npxURL.path)
+        guard !nodeIsMissing, !npxIsMissing else {
+            throw RuntimeError.missingExecutable(nodeIsMissing ? nodeURL : npxURL)
         }
         self.nodeURL = nodeURL
         self.npxURL = npxURL
@@ -177,9 +181,18 @@ public final class NodeRuntimeManager {
 
         let stagingURL = applicationSupportURL.appendingPathComponent("downloads/.staging-\(UUID().uuidString)", isDirectory: true)
         do {
+            defer { try? fileManager.removeItem(at: stagingURL) }
             try fileManager.createDirectory(at: stagingURL, withIntermediateDirectories: true)
-            let (archiveData, _) = try await URLSession.shared.data(from: distribution.archiveURL)
-            let (checksumData, _) = try await URLSession.shared.data(from: distribution.checksumsURL)
+
+            let (archiveData, archiveResponse) = try await URLSession.shared.data(from: distribution.archiveURL)
+            guard let archiveHTTP = archiveResponse as? HTTPURLResponse, (200..<300).contains(archiveHTTP.statusCode) else {
+                throw RuntimeError.nodeDownloadFailed("下载 \(distribution.archiveName) 失败：服务器未返回 2xx 状态")
+            }
+            let (checksumData, checksumResponse) = try await URLSession.shared.data(from: distribution.checksumsURL)
+            guard let checksumHTTP = checksumResponse as? HTTPURLResponse, (200..<300).contains(checksumHTTP.statusCode) else {
+                throw RuntimeError.nodeDownloadFailed("下载 SHASUMS256.txt 失败：服务器未返回 2xx 状态")
+            }
+
             let expected = try Self.checksum(for: distribution.archiveName, in: checksumData)
             let actual = SHA256.hash(data: archiveData).map { String(format: "%02x", $0) }.joined()
             guard expected == actual else { throw RuntimeError.checksumMismatch(expected: expected, actual: actual) }
@@ -189,9 +202,26 @@ public final class NodeRuntimeManager {
             let extractedURL = stagingURL.appendingPathComponent("extracted", isDirectory: true)
             try fileManager.createDirectory(at: extractedURL, withIntermediateDirectories: true)
             try ProcessRunner.run(executable: URL(fileURLWithPath: "/usr/bin/tar"), arguments: ["-xzf", archiveURL.path, "-C", extractedURL.path, "--strip-components", "1"])
-            try fileManager.createDirectory(at: installURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fileManager.fileExists(atPath: installURL.path) { try fileManager.removeItem(at: installURL) }
-            try fileManager.moveItem(at: extractedURL, to: installURL)
+            let extractedNode = extractedURL.appendingPathComponent("bin/node")
+            let extractedNpx = extractedURL.appendingPathComponent("bin/npx")
+            guard fileManager.isExecutableFile(atPath: extractedNode.path),
+                  fileManager.isExecutableFile(atPath: extractedNpx.path) else {
+                throw RuntimeError.extractionFailed("解压后缺少 node 或 npx")
+            }
+
+            let runtimeDirectory = installURL.deletingLastPathComponent()
+            try fileManager.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
+            let backupURL = runtimeDirectory.appendingPathComponent(".previous-\(UUID().uuidString)", isDirectory: true)
+            let hadExistingRuntime = fileManager.fileExists(atPath: installURL.path)
+            if hadExistingRuntime { try fileManager.moveItem(at: installURL, to: backupURL) }
+            do {
+                try fileManager.moveItem(at: extractedURL, to: installURL)
+            } catch {
+                if hadExistingRuntime { try? fileManager.moveItem(at: backupURL, to: installURL) }
+                throw error
+            }
+            if hadExistingRuntime { try? fileManager.removeItem(at: backupURL) }
+
             guard fileManager.isExecutableFile(atPath: existingNode.path) else { throw RuntimeError.extractionFailed("解压后缺少 node") }
             return try NodeRuntime(nodeURL: existingNode, version: distribution.version, architecture: distribution.architecture)
         } catch let error as RuntimeError {
@@ -206,9 +236,11 @@ public final class NodeRuntimeManager {
               let line = text.split(whereSeparator: { $0.isNewline }).first(where: { $0.contains(filename) }) else {
             throw RuntimeError.nodeDownloadFailed("官方校验文件中找不到 \(filename)")
         }
-        let checksum = line.split(whereSeparator: { $0 == " " || $0 == "*" }).first.map(String.init) ?? ""
-        guard checksum.count == 64 else { throw RuntimeError.nodeDownloadFailed("官方校验值格式无效") }
-        return checksum.lowercased()
+        let tokens = line.split(whereSeparator: { $0 == " " || $0 == "*" }).map(String.init)
+        guard tokens.count == 2, tokens[1].hasSuffix(filename), tokens[0].count == 64, tokens[0].allSatisfy({ $0.isHexDigit }) else {
+            throw RuntimeError.nodeDownloadFailed("官方校验值格式无效")
+        }
+        return tokens[0].lowercased()
     }
 }
 
