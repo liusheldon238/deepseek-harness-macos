@@ -196,23 +196,30 @@ public final class DSHProcessManager {
             executable = runtime.npxURL
             arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", descriptor.packageSpec]
         }
-        let process: ManagedProcess
-        do {
-            process = try ManagedProcess.spawn(executable: executable, arguments: arguments, environment: environment, currentDirectory: profileDirectory, output: output)
-            provisioningProcess = process
-            let status = try await process.wait(timeout: .seconds(120))
-            provisioningProcess = nil
-            guard status == 0 else {
-                throw RuntimeError.pluginInstallFailed("安装 \(descriptor.packageName) 失败，pnpm 退出码 \(status)。请查看上方内嵌日志后重试。")
+        let attempts = BundledPluginInstallPolicy.attempts(baseEnvironment: environment, packageSpec: descriptor.packageSpec)
+        for (index, attempt) in attempts.enumerated() {
+            do {
+                let process = try ManagedProcess.spawn(executable: executable, arguments: arguments, environment: attempt.environment, currentDirectory: profileDirectory, output: output)
+                provisioningProcess = process
+                let status = try await process.wait(timeout: .seconds(attempt.timeoutSeconds))
+                provisioningProcess = nil
+                guard status == 0 else {
+                    throw RuntimeError.pluginInstallFailed("pnpm 退出码 \(status)")
+                }
+                break
+            } catch {
+                provisioningProcess = nil
+                if error is CancellationError { throw error }
+                if index + 1 < attempts.count {
+                    appendDiagnostic("\(descriptor.packageName) 未能从本地缓存安装，正在回退联网安装。")
+                    continue
+                }
+                let detail = (error as? RuntimeError)?.errorDescription ?? error.localizedDescription
+                throw RuntimeError.pluginInstallFailed("安装 \(descriptor.packageName) 失败：\(detail)。请查看上方内嵌日志后重试。")
             }
-            guard !BundledPluginReadiness.needsInstall(descriptor, in: profileDirectory) else {
-                throw RuntimeError.pluginInstallFailed("\(descriptor.packageName) 命令已结束，但清单、已安装包或 bundle 激活状态仍不完整。")
-            }
-        } catch {
-            provisioningProcess = nil
-            if error is CancellationError { throw error }
-            if let runtimeError = error as? RuntimeError { throw runtimeError }
-            throw RuntimeError.pluginInstallFailed(error.localizedDescription)
+        }
+        guard !BundledPluginReadiness.needsInstall(descriptor, in: profileDirectory) else {
+            throw RuntimeError.pluginInstallFailed("\(descriptor.packageName) 命令已结束，但清单、已安装包或 bundle 激活状态仍不完整。")
         }
     }
 

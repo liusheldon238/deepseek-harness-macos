@@ -14,6 +14,26 @@ public struct BundledPluginDescriptor: Sendable, Equatable {
     }
 }
 
+public struct BundledPluginInstallAttempt: Sendable, Equatable {
+    public let environment: [String: String]
+    public let timeoutSeconds: Int
+}
+
+public enum BundledPluginInstallPolicy {
+    public static func attempts(baseEnvironment: [String: String], packageSpec: String) -> [BundledPluginInstallAttempt] {
+        guard packageSpec.hasPrefix("file:") else {
+            return [BundledPluginInstallAttempt(environment: baseEnvironment, timeoutSeconds: 120)]
+        }
+        var offline = baseEnvironment
+        offline["npm_config_offline"] = "true"
+        offline["NPM_CONFIG_OFFLINE"] = "true"
+        return [
+            BundledPluginInstallAttempt(environment: offline, timeoutSeconds: 20),
+            BundledPluginInstallAttempt(environment: baseEnvironment, timeoutSeconds: 120),
+        ]
+    }
+}
+
 public enum BundledPluginReadiness {
     public static func needsInstall(_ descriptor: BundledPluginDescriptor, in profileDirectory: URL, excludingBundles: Set<String> = []) -> Bool {
         if excludingBundles.contains(descriptor.bundleIdentifier) { return false }

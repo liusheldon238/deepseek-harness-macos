@@ -83,4 +83,22 @@ final class BundledPluginReadinessTests: XCTestCase {
 
         XCTAssertFalse(BundledPluginReadiness.needsInstall(registryDescriptor, in: profile))
     }
+
+    func testLocalPluginInstallTriesOfflineBeforeNetworkFallback() {
+        let base = ["PATH": "/test/bin"]
+        let attempts = BundledPluginInstallPolicy.attempts(baseEnvironment: base, packageSpec: "file:/bundle/plugin")
+
+        XCTAssertEqual(attempts.count, 2)
+        XCTAssertEqual(attempts[0].environment["npm_config_offline"], "true")
+        XCTAssertEqual(attempts[0].timeoutSeconds, 20)
+        XCTAssertNil(attempts[1].environment["npm_config_offline"])
+        XCTAssertEqual(attempts[1].timeoutSeconds, 120)
+    }
+
+    func testRegistryPluginInstallUsesNetworkDirectly() {
+        let attempts = BundledPluginInstallPolicy.attempts(baseEnvironment: [:], packageSpec: "dshmarket@1.13.1")
+
+        XCTAssertEqual(attempts.count, 1)
+        XCTAssertNil(attempts[0].environment["npm_config_offline"])
+    }
 }
