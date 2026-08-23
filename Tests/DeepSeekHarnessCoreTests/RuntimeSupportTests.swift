@@ -2,6 +2,27 @@ import XCTest
 @testable import DeepSeekHarnessCore
 
 final class RuntimeSupportTests: XCTestCase {
+    private func makeFakeNode(version: String, architecture: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let node = bin.appendingPathComponent("node")
+        let script = """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          printf '%s\\n' '\(version)'
+        else
+          printf '%s\\n' '\(architecture)'
+        fi
+        """
+        try Data(script.utf8).write(to: node)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+        let npx = bin.appendingPathComponent("npx")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: npx)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: npx.path)
+        return node
+    }
+
     func testVersionComparisonUsesSemanticComponents() throws {
         XCTAssertLessThan(try SemVer("22.19.0"), try SemVer("22.23.1"))
         XCTAssertGreaterThanOrEqual(try SemVer("22.23.1"), try SemVer("22.19.0"))
@@ -46,5 +67,19 @@ final class RuntimeSupportTests: XCTestCase {
         XCTAssertEqual(intel.archiveURL.absoluteString, "https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-x64.tar.gz")
         XCTAssertEqual(intel.archiveName, "node-v22.23.1-darwin-x64.tar.gz")
         XCTAssertEqual(intel.checksumsURL.absoluteString, "https://nodejs.org/dist/v22.23.1/SHASUMS256.txt")
+    }
+
+    func testCachedNodeProbeRejectsArchitectureClaimThatDoesNotMatchExecutable() throws {
+        let node = try makeFakeNode(version: "v22.23.1", architecture: "x64")
+
+        XCTAssertNil(try NodeRuntimeProbe.inspect(nodeURL: node, hostArchitecture: .arm64, minimum: try SemVer("22.19.0")))
+    }
+
+    func testCachedNodeProbeUsesExecutableArchitecture() throws {
+        let node = try makeFakeNode(version: "v22.23.1", architecture: "arm64")
+
+        let runtime = try XCTUnwrap(NodeRuntimeProbe.inspect(nodeURL: node, hostArchitecture: .arm64, minimum: try SemVer("22.19.0")))
+        XCTAssertEqual(runtime.architecture, .arm64)
+        XCTAssertEqual(runtime.version, try SemVer("22.23.1"))
     }
 }

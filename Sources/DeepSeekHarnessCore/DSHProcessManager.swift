@@ -5,10 +5,9 @@ import Darwin
 public final class DSHProcessManager {
     public static let marketPackage = "dshmarket@1.13.1"
     public static let presetAdvisorPackage = "dsh-agent-preset-advisor@0.1.0"
-    private var process: Process?
-    private var provisioningProcess: Process?
+    private var process: ManagedProcess?
+    private var provisioningProcess: ManagedProcess?
     private var outputHandle: FileHandle?
-    private var processGroupID: pid_t?
     private let logURL: URL
 
     public init(logURL: URL? = nil) {
@@ -30,24 +29,23 @@ public final class DSHProcessManager {
             stop()
             throw error
         }
-        let process = Process()
+        let executable: URL
+        let arguments: [String]
         if let localDSHCLI {
-            process.executableURL = runtime.nodeURL
-            process.arguments = [localDSHCLI.path, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
+            executable = runtime.nodeURL
+            arguments = [localDSHCLI.path, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
         } else {
-            process.executableURL = runtime.npxURL
-            process.arguments = ["--yes", dshPackage, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
+            executable = runtime.npxURL
+            arguments = ["--yes", dshPackage, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
         }
-        process.environment = environment
-        process.standardOutput = handle
-        process.standardError = handle
-        do { try process.run() } catch {
+        let process: ManagedProcess
+        do {
+            process = try ManagedProcess.spawn(executable: executable, arguments: arguments, environment: environment, currentDirectory: logURL.deletingLastPathComponent(), output: handle)
+        } catch {
             stop()
             throw RuntimeError.processFailed(error.localizedDescription)
         }
         self.process = process
-        let pid = process.processIdentifier
-        if setpgid(pid, pid) == 0 { processGroupID = pid }
 
         // The first launch can install several hundred MB of DSH dependencies
         // into the app-local npm cache. Keep the process alive long enough for
@@ -57,6 +55,7 @@ public final class DSHProcessManager {
         // and SelfHealingStartup will fall back to the last verified DSH.
         let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
+            try Task.checkCancellation()
             if let output = try? String(contentsOf: logURL, encoding: .utf8), let url = DSHOutputParser.url(from: output) {
                 do {
                     if try await Self.waitUntilHealthy(url: url, timeout: 30) { return url }
@@ -66,7 +65,7 @@ public final class DSHProcessManager {
                 }
             }
             if !process.isRunning { break }
-            try? await Task.sleep(for: .milliseconds(200))
+            try await Task.sleep(for: .milliseconds(200))
         }
         let output = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
         stop()
@@ -78,21 +77,12 @@ public final class DSHProcessManager {
     }
 
     public func stop() {
-        if let provisioningProcess, provisioningProcess.isRunning {
-            provisioningProcess.terminate()
-            provisioningProcess.waitUntilExit()
-        }
+        provisioningProcess?.terminateImmediately()
         self.provisioningProcess = nil
-        if let processGroupID { _ = kill(-processGroupID, SIGTERM) }
-        if let process, process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-        }
-        if let processGroupID { _ = kill(-processGroupID, SIGKILL) }
+        process?.terminateImmediately()
         try? outputHandle?.close()
         outputHandle = nil
         process = nil
-        self.processGroupID = nil
     }
 
     public var isRunning: Bool { process?.isRunning == true }
@@ -169,34 +159,29 @@ public final class DSHProcessManager {
            FileManager.default.fileExists(atPath: installedDirectory.path),
            (!packageSpec.hasPrefix("file:") || installedSpec == packageSpec || bundledPackageMatches(installedDirectory, packageSpec: packageSpec)) { return }
 
-        let process = Process()
+        let executable: URL
+        let arguments: [String]
         if let localDSHCLI {
-            process.executableURL = runtime.nodeURL
-            process.arguments = [localDSHCLI.path, "plugin", "--profile", "web", "add", packageSpec]
+            executable = runtime.nodeURL
+            arguments = [localDSHCLI.path, "plugin", "--profile", "web", "add", packageSpec]
         } else {
-            process.executableURL = runtime.npxURL
-            process.arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", packageSpec]
+            executable = runtime.npxURL
+            arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", packageSpec]
         }
-        process.environment = environment
-        process.standardOutput = output
-        process.standardError = output
-        provisioningProcess = process
+        let process: ManagedProcess
         do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                process.terminationHandler = { _ in continuation.resume() }
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+            process = try ManagedProcess.spawn(executable: executable, arguments: arguments, environment: environment, currentDirectory: profileDirectory, output: output)
+            provisioningProcess = process
+            let status = try await process.wait(timeout: .seconds(120))
+            provisioningProcess = nil
+            guard status == 0 else {
+                throw RuntimeError.pluginInstallFailed("安装 \(packageName) 失败，pnpm 退出码 \(status)。请查看上方内嵌日志后重试。")
             }
         } catch {
             provisioningProcess = nil
+            if error is CancellationError { throw error }
+            if let runtimeError = error as? RuntimeError { throw runtimeError }
             throw RuntimeError.pluginInstallFailed(error.localizedDescription)
-        }
-        provisioningProcess = nil
-        guard process.terminationStatus == 0 else {
-            throw RuntimeError.pluginInstallFailed("安装 \(packageName) 失败，pnpm 退出码 \(process.terminationStatus)。请查看上方内嵌日志后重试。")
         }
     }
 
@@ -212,6 +197,7 @@ public final class DSHProcessManager {
     private static func waitUntilHealthy(url: URL, timeout: TimeInterval) async throws -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
+            try Task.checkCancellation()
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
                 if (response as? HTTPURLResponse)?.statusCode == 200 {
@@ -228,7 +214,7 @@ public final class DSHProcessManager {
                 // failure into an opaque timeout.
                 throw error
             } catch { }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await Task.sleep(for: .milliseconds(250))
         }
         return false
     }

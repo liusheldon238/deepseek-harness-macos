@@ -50,11 +50,26 @@ final class SelfHealingStartupTests: XCTestCase {
         try Data(#"{"version":"0.1.1-rc.2"}"#.utf8).write(to: package.appendingPathComponent("package.json"))
         try Data("#!/usr/bin/env node".utf8).write(to: package.appendingPathComponent("lib/bin.js"))
 
-        let local = DSHLocalRuntime.inspect(directory: root)
+        try Data("arm64\n".utf8).write(to: root.appendingPathComponent("node-architecture"))
+        let local = DSHLocalRuntime.inspect(directory: root, expectedArchitecture: .arm64)
         XCTAssertEqual(local?.version, "0.1.1-rc.2")
         XCTAssertEqual(local?.cliURL, package.appendingPathComponent("lib/bin.js"))
         XCTAssertFalse(DSHLocalRuntime.needsInstall(local: local, latestVersion: "0.1.1-rc.2"))
         XCTAssertTrue(DSHLocalRuntime.needsInstall(local: local, latestVersion: "0.1.2"))
+    }
+
+    func testLocalDSHRuntimeRejectsMissingOrMismatchedArchitectureMarker() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let package = root.appendingPathComponent("node_modules/@deepseek-ai/dsh")
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("lib"), withIntermediateDirectories: true)
+        try Data(#"{"version":"0.1.1-rc.2"}"#.utf8).write(to: package.appendingPathComponent("package.json"))
+        try Data("#!/usr/bin/env node".utf8).write(to: package.appendingPathComponent("lib/bin.js"))
+
+        XCTAssertNil(DSHLocalRuntime.inspect(directory: root, expectedArchitecture: .arm64))
+        try Data("x64\n".utf8).write(to: root.appendingPathComponent("node-architecture"))
+        XCTAssertNil(DSHLocalRuntime.inspect(directory: root, expectedArchitecture: .arm64))
+        try Data("arm64\n".utf8).write(to: root.appendingPathComponent("node-architecture"))
+        XCTAssertNotNil(DSHLocalRuntime.inspect(directory: root, expectedArchitecture: .arm64))
     }
 
     @MainActor

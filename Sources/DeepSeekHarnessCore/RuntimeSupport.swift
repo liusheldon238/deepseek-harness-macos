@@ -77,6 +77,7 @@ public enum RuntimeError: LocalizedError, Sendable {
     case extractionFailed(String)
     case missingExecutable(URL)
     case processFailed(String)
+    case processTimedOut
     case pluginInstallFailed(String)
     case pluginConflict(String)
     case dshDidNotStart(String)
@@ -90,6 +91,7 @@ public enum RuntimeError: LocalizedError, Sendable {
         case .extractionFailed(let detail): return "Node.js 解压失败：\(detail)"
         case .missingExecutable(let url): return "缺少可执行文件：\(url.path)"
         case .processFailed(let detail): return "进程启动失败：\(detail)"
+        case .processTimedOut: return "进程运行超时，已停止整个进程组。"
         case .pluginInstallFailed(let detail): return "插件安装失败：\(detail)"
         case .pluginConflict(let detail): return "插件冲突：\(detail)"
         case .dshDidNotStart(let detail): return "DeepSeek Harness 未能启动：\(detail)"
@@ -120,6 +122,19 @@ public struct NodeRuntime: Sendable {
         self.npxURL = npxURL
         self.version = version
         self.architecture = architecture
+    }
+}
+
+public enum NodeRuntimeProbe {
+    public static func inspect(nodeURL: URL, hostArchitecture: NodeArchitecture, minimum: SemVer) throws -> NodeRuntime? {
+        guard FileManager.default.isExecutableFile(atPath: nodeURL.path),
+              let versionText = try? ProcessRunner.capture(executable: nodeURL, arguments: ["--version"]),
+              let version = try? SemVer(versionText),
+              let architectureText = try? ProcessRunner.capture(executable: nodeURL, arguments: ["-p", "process.arch"]),
+              let architecture = NodeArchitecture(nodeProcessArchitecture: architectureText),
+              NodeCompatibility.isCompatible(version: version, architecture: architecture, hostArchitecture: hostArchitecture, minimum: minimum),
+              let runtime = try? NodeRuntime(nodeURL: nodeURL, version: version, architecture: architecture) else { return nil }
+        return runtime
     }
 }
 
@@ -155,14 +170,7 @@ public final class NodeRuntimeManager {
         ]
         var seen = Set<String>()
         for candidate in candidates where seen.insert(candidate.path).inserted {
-            guard fileManager.isExecutableFile(atPath: candidate.path) else { continue }
-            guard let versionText = try? ProcessRunner.capture(executable: candidate, arguments: ["--version"]),
-                  let version = try? SemVer(versionText),
-                  let architectureText = try? ProcessRunner.capture(executable: candidate, arguments: ["-p", "process.arch"]),
-                  let architecture = NodeArchitecture(nodeProcessArchitecture: architectureText),
-                  NodeCompatibility.isCompatible(version: version, architecture: architecture, hostArchitecture: .host, minimum: Self.minimumVersion),
-                  let runtime = try? NodeRuntime(nodeURL: candidate, version: version, architecture: architecture) else { continue }
-            return runtime
+            if let runtime = try NodeRuntimeProbe.inspect(nodeURL: candidate, hostArchitecture: .host, minimum: Self.minimumVersion) { return runtime }
         }
         return nil
     }
@@ -171,11 +179,7 @@ public final class NodeRuntimeManager {
         let distribution = NodeDistribution(version: Self.provisionedVersion, architecture: .host)
         let installURL = applicationSupportURL.appendingPathComponent("runtime/v\(distribution.version)-\(distribution.architecture.rawValue)", isDirectory: true)
         let existingNode = installURL.appendingPathComponent("bin/node")
-        if fileManager.isExecutableFile(atPath: existingNode.path),
-           let versionText = try? ProcessRunner.capture(executable: existingNode, arguments: ["--version"]),
-           let version = try? SemVer(versionText),
-           let runtime = try? NodeRuntime(nodeURL: existingNode, version: version, architecture: distribution.architecture),
-           NodeCompatibility.isCompatible(version: version, architecture: distribution.architecture, hostArchitecture: .host, minimum: Self.minimumVersion) {
+        if let runtime = try NodeRuntimeProbe.inspect(nodeURL: existingNode, hostArchitecture: .host, minimum: Self.minimumVersion) {
             return runtime
         }
 
@@ -222,8 +226,10 @@ public final class NodeRuntimeManager {
             }
             if hadExistingRuntime { try? fileManager.removeItem(at: backupURL) }
 
-            guard fileManager.isExecutableFile(atPath: existingNode.path) else { throw RuntimeError.extractionFailed("解压后缺少 node") }
-            return try NodeRuntime(nodeURL: existingNode, version: distribution.version, architecture: distribution.architecture)
+            guard let runtime = try NodeRuntimeProbe.inspect(nodeURL: existingNode, hostArchitecture: .host, minimum: Self.minimumVersion) else {
+                throw RuntimeError.extractionFailed("解压后 Node 架构或版本不匹配")
+            }
+            return runtime
         } catch let error as RuntimeError {
             throw error
         } catch {

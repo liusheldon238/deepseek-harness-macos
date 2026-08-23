@@ -94,11 +94,14 @@ public struct DSHLocalRuntime: Sendable, Equatable {
     public let version: String
     public let cliURL: URL
 
-    public static func inspect(directory: URL, fileManager: FileManager = .default) -> DSHLocalRuntime? {
+    public static func inspect(directory: URL, expectedArchitecture: NodeArchitecture, fileManager: FileManager = .default) -> DSHLocalRuntime? {
         let package = directory.appendingPathComponent("node_modules/@deepseek-ai/dsh", isDirectory: true)
         let manifestURL = package.appendingPathComponent("package.json")
         let cliURL = package.appendingPathComponent("lib/bin.js")
-        guard fileManager.fileExists(atPath: cliURL.path),
+        let markerURL = directory.appendingPathComponent("node-architecture")
+        guard let marker = try? String(contentsOf: markerURL, encoding: .utf8),
+              NodeArchitecture(nodeProcessArchitecture: marker) == expectedArchitecture,
+              fileManager.fileExists(atPath: cliURL.path),
               let data = try? Data(contentsOf: manifestURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let version = json["version"] as? String else { return nil }
@@ -134,13 +137,14 @@ public final class SelfHealingStartup {
         let snapshot = try makeSnapshot(profileDirectory: profileDirectory)
         let dshPackage = await latestDSHPackage() ?? Self.fallbackDSHPackage
         let runtimeDirectory = supportURL.appendingPathComponent("dsh-runtime", isDirectory: true)
-        var localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, fileManager: fileManager)
+        var localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, expectedArchitecture: runtime.architecture, fileManager: fileManager)
         if let latestVersion = Self.packageVersion(dshPackage), DSHLocalRuntime.needsInstall(local: localDSH, latestVersion: latestVersion), let pnpm = pnpmURL() {
             progress(.dsh, "发现 DSH \(latestVersion)，正在更新一次性本地运行时…")
             try fileManager.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
             let result = try await run(pnpm, arguments: ["add", "--dir", runtimeDirectory.path, dshPackage], cwd: supportURL, runtime: runtime)
             if result == 0 {
-                localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, fileManager: fileManager)
+                try Data("\(runtime.architecture.rawValue)\n".utf8).write(to: runtimeDirectory.appendingPathComponent("node-architecture"), options: .atomic)
+                localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, expectedArchitecture: runtime.architecture, fileManager: fileManager)
                 processManager.appendDiagnostic("DSH 本地运行时已更新到 \(localDSH?.version ?? latestVersion)。")
             } else {
                 processManager.appendDiagnostic("DSH \(latestVersion) 更新失败，继续使用最后一次可用的本地版本。")
@@ -286,22 +290,14 @@ public final class SelfHealingStartup {
     }
 
     private func run(_ executable: URL, arguments: [String], cwd: URL, runtime: NodeRuntime) async throws -> Int32 {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        process.currentDirectoryURL = cwd
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(runtime.nodeURL.deletingLastPathComponent().path):\(environment["PATH"] ?? "")"
-        process.environment = environment
         let updateLogURL = supportURL.appendingPathComponent("update.log")
         if !fileManager.fileExists(atPath: updateLogURL.path) { fileManager.createFile(atPath: updateLogURL.path, contents: nil) }
         let updateHandle = try? FileHandle(forWritingTo: updateLogURL)
         _ = try? updateHandle?.seekToEnd()
-        process.standardOutput = updateHandle
-        process.standardError = updateHandle
-        try process.run()
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in process.terminationHandler = { _ in continuation.resume() } }
+        let status = try await ManagedProcess.run(executable: executable, arguments: arguments, environment: environment, currentDirectory: cwd, output: updateHandle, timeout: .seconds(120))
         try? updateHandle?.close()
-        return process.terminationStatus
+        return status
     }
 }
