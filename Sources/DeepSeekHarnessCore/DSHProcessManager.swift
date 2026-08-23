@@ -196,6 +196,32 @@ public final class DSHProcessManager {
             executable = runtime.npxURL
             arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", descriptor.packageSpec]
         }
+        if descriptor.packageSpec.hasPrefix("file:"), BundledPluginReadiness.hasInstallation(descriptor, in: profileDirectory) {
+            let removeArguments: [String]
+            if let localDSHCLI {
+                removeArguments = [localDSHCLI.path, "plugin", "--profile", "web", "remove", descriptor.packageName]
+            } else {
+                removeArguments = ["--yes", dshPackage, "plugin", "--profile", "web", "remove", descriptor.packageName]
+            }
+            var offlineEnvironment = environment
+            offlineEnvironment["npm_config_offline"] = "true"
+            offlineEnvironment["NPM_CONFIG_OFFLINE"] = "true"
+            do {
+                let removal = try ManagedProcess.spawn(executable: executable, arguments: removeArguments, environment: offlineEnvironment, currentDirectory: profileDirectory, output: output)
+                provisioningProcess = removal
+                let status = try await removal.wait(timeout: .seconds(20))
+                provisioningProcess = nil
+                guard status == 0 else {
+                    throw RuntimeError.pluginInstallFailed("移除旧版 \(descriptor.packageName) 失败，pnpm 退出码 \(status)。")
+                }
+                appendDiagnostic("已移除不完整或旧版 \(descriptor.packageName)，准备安装内置版本。")
+            } catch {
+                provisioningProcess = nil
+                if error is CancellationError { throw error }
+                if let runtimeError = error as? RuntimeError { throw runtimeError }
+                throw RuntimeError.pluginInstallFailed("移除旧版 \(descriptor.packageName) 失败：\(error.localizedDescription)")
+            }
+        }
         let attempts = BundledPluginInstallPolicy.attempts(baseEnvironment: environment, packageSpec: descriptor.packageSpec)
         for (index, attempt) in attempts.enumerated() {
             do {

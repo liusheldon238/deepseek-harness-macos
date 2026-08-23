@@ -168,6 +168,20 @@ public enum RegistryPluginUpdate {
     }
 }
 
+public enum RegistryPluginUpdateRetry {
+    public static let cooldownSeconds: TimeInterval = 6 * 60 * 60
+
+    public static func shouldAttempt(targetVersion: String, failedVersion: String?, failedAt: Date?, now: Date = Date()) -> Bool {
+        guard failedVersion == targetVersion, let failedAt else { return true }
+        return now.timeIntervalSince(failedAt) >= cooldownSeconds
+    }
+}
+
+private struct RegistryPluginFailureRecord: Codable {
+    let version: String
+    let failedAt: Date
+}
+
 public struct DSHLocalRuntime: Sendable, Equatable {
     public let version: String
     public let cliURL: URL
@@ -336,11 +350,17 @@ public final class SelfHealingStartup {
             return !spec.hasPrefix("file:") && !Self.registryCorePluginPrefixes.contains(where: name.hasPrefix) && name != "@deepseek-ai/dsh"
         }.sorted()
         guard !names.isEmpty, let pnpm = pnpmURL() else { return [] }
+        let failureURL = supportURL.appendingPathComponent("registry-plugin-update-failures.json")
+        var failures = loadRegistryPluginFailures(from: failureURL)
         var updated: [String] = []
         for name in names {
             guard let latest = await latestNPMVersion(for: name) else { continue }
             let installedVersion = Self.installedPackageVersion(name, in: profileDirectory)
             if !RegistryPluginUpdate.needsUpdate(installedVersion: installedVersion, latestVersion: latest) { continue }
+            if let failure = failures[name], !RegistryPluginUpdateRetry.shouldAttempt(targetVersion: latest, failedVersion: failure.version, failedAt: failure.failedAt) {
+                processManager.appendDiagnostic("插件 \(name) 上次更新到 \(latest) 失败，冷却期内继续使用本地版本 \(installedVersion ?? "未知") 启动。")
+                continue
+            }
             do {
                 let result = try await run(
                     pnpm,
@@ -351,17 +371,38 @@ public final class SelfHealingStartup {
                 )
                 if result == 0 {
                     updated.append(name)
+                    failures.removeValue(forKey: name)
+                    saveRegistryPluginFailures(failures, to: failureURL)
                 } else {
+                    failures[name] = RegistryPluginFailureRecord(version: latest, failedAt: Date())
+                    saveRegistryPluginFailures(failures, to: failureURL)
                     processManager.appendDiagnostic("插件 \(name) 更新到 \(latest) 失败（退出码 \(result)），继续使用本地版本 \(installedVersion ?? "未知") 启动。")
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                failures[name] = RegistryPluginFailureRecord(version: latest, failedAt: Date())
+                saveRegistryPluginFailures(failures, to: failureURL)
                 processManager.appendDiagnostic("插件 \(name) 更新到 \(latest) 超时或失败，继续使用本地版本 \(installedVersion ?? "未知") 启动：\(error.localizedDescription)")
             }
         }
         _ = dshPackage
         return updated
+    }
+
+    private func loadRegistryPluginFailures(from url: URL) -> [String: RegistryPluginFailureRecord] {
+        guard let data = try? Data(contentsOf: url),
+              let records = try? JSONDecoder().decode([String: RegistryPluginFailureRecord].self, from: data) else { return [:] }
+        return records
+    }
+
+    private func saveRegistryPluginFailures(_ records: [String: RegistryPluginFailureRecord], to url: URL) {
+        if records.isEmpty {
+            try? fileManager.removeItem(at: url)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 
     private func disableNextPlugin(profileDirectory: URL, detail: String, excluding: [String]) throws -> String? {

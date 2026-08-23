@@ -35,6 +35,13 @@ public enum BundledPluginInstallPolicy {
 }
 
 public enum BundledPluginReadiness {
+    public static func hasInstallation(_ descriptor: BundledPluginDescriptor, in profileDirectory: URL) -> Bool {
+        let manifest = object(at: profileDirectory.appendingPathComponent("package.json"))
+        let dependencies = manifest?["dependencies"] as? [String: Any]
+        if dependencies?[descriptor.packageName] != nil { return true }
+        return FileManager.default.fileExists(atPath: profileDirectory.appendingPathComponent("node_modules/\(descriptor.packageName)/package.json").path)
+    }
+
     public static func needsInstall(_ descriptor: BundledPluginDescriptor, in profileDirectory: URL, excludingBundles: Set<String> = []) -> Bool {
         if excludingBundles.contains(descriptor.bundleIdentifier) { return false }
         guard let manifest = object(at: profileDirectory.appendingPathComponent("package.json")),

@@ -57,6 +57,14 @@ final class BundledPluginReadinessTests: XCTestCase {
     func testStaleInstalledPackageTriggersReinstall() throws {
         let profile = try makeProfile(installedVersion: "0.0.9")
 
+        XCTAssertTrue(BundledPluginReadiness.hasInstallation(descriptor, in: profile))
+        XCTAssertTrue(BundledPluginReadiness.needsInstall(descriptor, in: profile))
+    }
+
+    func testCompletelyMissingPluginHasNoInstallationToRemove() throws {
+        let profile = try makeProfile(dependency: nil, installedVersion: nil, bundles: [])
+
+        XCTAssertFalse(BundledPluginReadiness.hasInstallation(descriptor, in: profile))
         XCTAssertTrue(BundledPluginReadiness.needsInstall(descriptor, in: profile))
     }
 

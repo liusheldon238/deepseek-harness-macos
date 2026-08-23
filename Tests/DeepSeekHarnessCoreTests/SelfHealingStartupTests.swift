@@ -34,6 +34,16 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertFalse(RegistryPluginUpdate.failureBlocksStartup)
     }
 
+    func testRegistryPluginUpdateFailureUsesVersionScopedCooldown() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        let recent = now.addingTimeInterval(-60)
+        let expired = now.addingTimeInterval(-RegistryPluginUpdateRetry.cooldownSeconds - 1)
+
+        XCTAssertFalse(RegistryPluginUpdateRetry.shouldAttempt(targetVersion: "0.26.0", failedVersion: "0.26.0", failedAt: recent, now: now))
+        XCTAssertTrue(RegistryPluginUpdateRetry.shouldAttempt(targetVersion: "0.26.1", failedVersion: "0.26.0", failedAt: recent, now: now))
+        XCTAssertTrue(RegistryPluginUpdateRetry.shouldAttempt(targetVersion: "0.26.0", failedVersion: "0.26.0", failedAt: expired, now: now))
+    }
+
     func testClientPluginFailureParsesBrowserRenderedError() {
         let text = """
         Failed to load plugins
