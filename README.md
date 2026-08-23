@@ -14,15 +14,15 @@ Native macOS shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 - Verifies the official Node archive SHA-256 before extraction.
 - Starts `@deepseek-ai/dsh@0.1.0-rc.6` on loopback with an OS-selected free port.
 - Initializes the app-owned web profile and installs `dshmarket@1.13.1` on first launch, so the DSH Web UI includes a plugin marketplace for browsing, installing, updating, disabling, and removing other plugins.
-- Installs the bundled `dsh-agent-preset-advisor` plugin on first launch. It analyzes a task locally, compares it with the active/default preset, and recommends a better preset when the current one is not a good fit.
+- Installs the pinned `dsh-preset-catalog` and `dsh-model-search` snapshots from `Resources/Plugins` in that order. The catalog provides searchable domain presets; model search improves composer and `/model` selection while preserving raw model IDs.
 - On every launch, verifies that Node matches the host architecture (Apple Silicon uses arm64 only), checks the latest DeepSeek Harness release, updates registry plugins one at a time, snapshots the profile, and rolls back failed updates.
 - If the Web UI reports a plugin boot conflict, automatically isolates third-party plugin layers one at a time, retries startup, and shows the conflict and disabled-plugin list in the red inline log.
-- Waits for an HTTP 200 response before loading the page in the app window.
+- Requires the root page plus `agentPreset.list` and `settings.describe` RPC checks before loading the page, then continuously watches backend health and reloads without stale WebView cache after recovery.
 - Stops the DSH child process when the app exits.
 
 Runtime files are stored in `~/Library/Application Support/DeepSeek Harness Desktop/`. No administrator access is required.
 
-The isolated DSH profile is stored below `dsh-home/profiles/web`; it does not modify the user's default `~/.dsh` profile. The market and advisor packages are installed idempotently; the advisor never uploads task text. Offline startup uses the last verified local versions.
+The isolated DSH profile is stored below `dsh-home/profiles/web`; it does not modify the user's default `~/.dsh` profile. The market, preset catalog, and model search packages are installed idempotently. A missing dependency, installed package, version, or bundle activation marker triggers repair on the next cold launch. Offline startup uses the last verified local versions.
 
 ## Build
 
@@ -36,11 +36,11 @@ swift test
 open "build/DeepSeek Harness.app"
 ```
 
-The package script creates an ad-hoc signed app, a ZIP, and a drag-to-Applications DMG in `build/`. Artifact names embed the version read from `CFBundleShortVersionString` in `Resources/Info.plist` (currently `0.0.1`): `build/DeepSeek-Harness-Desktop-0.0.1-macos.zip` and `build/DeepSeek-Harness-Desktop-0.0.1-macos.dmg`. The smoke test validates the bundle (plist lint, code signature, bundled advisor plugin) and prints the manual verification steps; because the app starts DSH with `--port 0`, the real port is OS-selected and appears in the generated log as `dsh web: http://127.0.0.1:<port>` — port 3080 is never used. The app icon is derived from the official DeepSeek logo asset in [deepseek-ai/DeepSeek-V2](https://github.com/deepseek-ai/DeepSeek-V2/blob/main/figures/logo.svg). An Apple Developer signing identity is required for a notarized distribution; otherwise macOS may require a one-time manual approval on first launch.
+The package script verifies the submodule commits and `plugins.lock.json`, then creates an ad-hoc signed app, a ZIP, and a drag-to-Applications DMG in `build/`. Artifact names embed version `0.0.3`: `build/DeepSeek-Harness-Desktop-0.0.3-macos.zip` and `build/DeepSeek-Harness-Desktop-0.0.3-macos.dmg`. The smoke test validates the bundle, both pinned plugins, plist, and code signature; because the app starts DSH with `--port 0`, the real port is OS-selected and appears in the generated log as `dsh web: http://127.0.0.1:<port>`. The app icon is derived from the official DeepSeek logo asset in [deepseek-ai/DeepSeek-V2](https://github.com/deepseek-ai/DeepSeek-V2/blob/main/figures/logo.svg). An Apple Developer signing identity is required for a notarized distribution; otherwise macOS may require a one-time manual approval on first launch.
 
 ## Release
 
-Cutting a release is a checklist: run the tests, package, smoke test, tag `v0.0.1`, push `origin main --tags`, then attach the DMG and ZIP to the GitHub release. See [RELEASE.md](RELEASE.md) for the full step-by-step procedure.
+Cutting a release is a checklist: run the tests, package, smoke test, tag `v0.0.3`, push `origin main --tags`, then attach the DMG and ZIP to the GitHub release. See [RELEASE.md](RELEASE.md) for the full step-by-step procedure.
 
 ## Development
 

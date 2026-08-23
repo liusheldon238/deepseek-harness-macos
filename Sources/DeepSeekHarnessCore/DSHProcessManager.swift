@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 public final class DSHProcessManager {
     public static let marketPackage = "dshmarket@1.13.1"
-    public static let presetAdvisorPackage = "dsh-agent-preset-advisor@0.1.0"
+    public static let legacyAdvisorPackageName = "dsh-agent-preset-advisor"
     private var process: ManagedProcess?
     private var provisioningProcess: ManagedProcess?
     private var outputHandle: FileHandle?
@@ -32,7 +32,7 @@ public final class DSHProcessManager {
         let environment: [String: String]
         do {
             environment = try installEnvironment(using: runtime)
-        try await ensureMarketPlugin(using: runtime, environment: environment, output: handle, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
+            try await ensureRequiredPlugins(using: runtime, environment: environment, output: handle, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
         } catch {
             stop()
             throw error
@@ -165,32 +165,36 @@ public final class DSHProcessManager {
         return environment
     }
 
-    private func ensureMarketPlugin(using runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
+    private func ensureRequiredPlugins(using runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
         let supportURL = logURL.deletingLastPathComponent()
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
-        try await installPluginIfNeeded(Self.marketPackage, packageName: "dshmarket", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
-        let bundledAdvisor = Bundle.main.resourceURL?.appendingPathComponent("dsh-agent-preset-advisor", isDirectory: true)
-        let developmentAdvisor = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/dsh-agent-preset-advisor", isDirectory: true)
-        guard let advisorURL = [bundledAdvisor, developmentAdvisor].compactMap({ $0 }).first(where: {
-            FileManager.default.fileExists(atPath: $0.appendingPathComponent("package.json").path)
-        }) else { return }
-        try await installPluginIfNeeded("file:\(advisorURL.path)", packageName: "dsh-agent-preset-advisor", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
+        let market = BundledPluginDescriptor(packageName: "dshmarket", packageSpec: Self.marketPackage, expectedVersion: nil, bundleIdentifier: "dshmarket")
+        try await installPluginIfNeeded(market, profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
+        try await removeLegacyAdvisorIfNeeded(profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
+
+        let bundledPlugins = Bundle.main.resourceURL?.appendingPathComponent("Plugins", isDirectory: true)
+        let developmentPlugins = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/Plugins", isDirectory: true)
+        guard let pluginsDirectory = [bundledPlugins, developmentPlugins].compactMap({ $0 }).first(where: {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("plugins.lock.json").path)
+        }) else {
+            throw RuntimeError.pluginInstallFailed("应用中缺少捆绑插件目录或 plugins.lock.json。")
+        }
+        for descriptor in try DesktopBundledPluginCatalog.descriptors(pluginsDirectory: pluginsDirectory) {
+            try await installPluginIfNeeded(descriptor, profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
+        }
     }
 
-    private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
-        guard let descriptor = pluginDescriptor(packageSpec: packageSpec, packageName: packageName) else {
-            throw RuntimeError.pluginInstallFailed("无法读取 \(packageName) 的目标版本。")
-        }
+    private func installPluginIfNeeded(_ descriptor: BundledPluginDescriptor, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
         if !BundledPluginReadiness.needsInstall(descriptor, in: profileDirectory, excludingBundles: suppressedPluginBundles) { return }
 
         let executable: URL
         let arguments: [String]
         if let localDSHCLI {
             executable = runtime.nodeURL
-            arguments = [localDSHCLI.path, "plugin", "--profile", "web", "add", packageSpec]
+            arguments = [localDSHCLI.path, "plugin", "--profile", "web", "add", descriptor.packageSpec]
         } else {
             executable = runtime.npxURL
-            arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", packageSpec]
+            arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", descriptor.packageSpec]
         }
         let process: ManagedProcess
         do {
@@ -199,10 +203,10 @@ public final class DSHProcessManager {
             let status = try await process.wait(timeout: .seconds(120))
             provisioningProcess = nil
             guard status == 0 else {
-                throw RuntimeError.pluginInstallFailed("安装 \(packageName) 失败，pnpm 退出码 \(status)。请查看上方内嵌日志后重试。")
+                throw RuntimeError.pluginInstallFailed("安装 \(descriptor.packageName) 失败，pnpm 退出码 \(status)。请查看上方内嵌日志后重试。")
             }
             guard !BundledPluginReadiness.needsInstall(descriptor, in: profileDirectory) else {
-                throw RuntimeError.pluginInstallFailed("\(packageName) 命令已结束，但清单、已安装包或 bundle 激活状态仍不完整。")
+                throw RuntimeError.pluginInstallFailed("\(descriptor.packageName) 命令已结束，但清单、已安装包或 bundle 激活状态仍不完整。")
             }
         } catch {
             provisioningProcess = nil
@@ -212,19 +216,33 @@ public final class DSHProcessManager {
         }
     }
 
-    private func pluginDescriptor(packageSpec: String, packageName: String) -> BundledPluginDescriptor? {
-        let version: String?
-        if packageSpec.hasPrefix("file:") {
-            let manifestURL = URL(fileURLWithPath: String(packageSpec.dropFirst(5))).appendingPathComponent("package.json")
-            guard let data = try? Data(contentsOf: manifestURL),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  json["name"] as? String == packageName else { return nil }
-            version = json["version"] as? String
+    private func removeLegacyAdvisorIfNeeded(profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
+        guard LegacyPluginMigration.needsRemoval(packageName: Self.legacyAdvisorPackageName, bundleIdentifier: Self.legacyAdvisorPackageName, in: profileDirectory) else { return }
+        let executable: URL
+        let arguments: [String]
+        if let localDSHCLI {
+            executable = runtime.nodeURL
+            arguments = [localDSHCLI.path, "plugin", "--profile", "web", "remove", Self.legacyAdvisorPackageName]
         } else {
-            version = nil
+            executable = runtime.npxURL
+            arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "remove", Self.legacyAdvisorPackageName]
         }
-        guard let version, !version.isEmpty else { return nil }
-        return BundledPluginDescriptor(packageName: packageName, packageSpec: packageSpec, expectedVersion: version, bundleIdentifier: packageName)
+        do {
+            let status = try await ManagedProcess.run(executable: executable, arguments: arguments, environment: environment, currentDirectory: profileDirectory, output: output, timeout: .seconds(120))
+            if status == 0,
+               !LegacyPluginMigration.needsRemoval(packageName: Self.legacyAdvisorPackageName, bundleIdentifier: Self.legacyAdvisorPackageName, in: profileDirectory) {
+                appendDiagnostic("已移除旧版 dsh-agent-preset-advisor。")
+                return
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            appendDiagnostic("旧版 advisor 卸载命令失败：\(error.localizedDescription)")
+        }
+        let disabled = try LegacyPluginMigration.disableBundle(Self.legacyAdvisorPackageName, in: profileDirectory)
+        appendDiagnostic(disabled
+            ? "旧版 advisor 未能完整卸载，已从 bundle 激活列表禁用；下次启动继续迁移。"
+            : "旧版 advisor 未能完整卸载且当前未激活；下次启动继续迁移。")
     }
 
     private func waitUntilHealthy(url: URL, timeout: TimeInterval) async throws -> Bool {

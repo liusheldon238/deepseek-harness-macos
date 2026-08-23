@@ -1,0 +1,6 @@
+[submodule "Resources/Plugins/dsh-preset-catalog"]
+	path = Resources/Plugins/dsh-preset-catalog
+	url = https://github.com/liusheldon238/dsh-preset-catalog.git
+[submodule "Resources/Plugins/dsh-model-search"]
+	path = Resources/Plugins/dsh-model-search
+	url = https://github.com/liusheldon238/dsh-model-search.git

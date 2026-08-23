@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "packageName": "dsh-preset-catalog",
+      "version": "0.1.0",
+      "bundleIdentifier": "dsh-preset-catalog",
+      "path": "dsh-preset-catalog",
+      "repository": "https://github.com/liusheldon238/dsh-preset-catalog",
+      "commit": "4ad76973914da1bf49d156b6143705e8c33d1c9d",
+      "releaseURL": "https://github.com/liusheldon238/dsh-preset-catalog/releases/tag/v0.1.0",
+      "releaseAssetURL": "https://github.com/liusheldon238/dsh-preset-catalog/releases/download/v0.1.0/dsh-preset-catalog-0.1.0.tgz",
+      "releaseAssetSHA256": "95b30dd1911a880b22b56cf02566a94688b58fbc72e66356e0597db50e469c9f"
+    },
+    {
+      "packageName": "dsh-model-search",
+      "version": "0.1.0",
+      "bundleIdentifier": "dsh-model-search",
+      "path": "dsh-model-search",
+      "repository": "https://github.com/liusheldon238/dsh-model-search",
+      "commit": "f902f6695f408c384d6f78f9fa9a7fc17e694e0e",
+      "releaseURL": "https://github.com/liusheldon238/dsh-model-search/releases/tag/v0.1.0",
+      "releaseAssetURL": "https://github.com/liusheldon238/dsh-model-search/releases/download/v0.1.0/dsh-model-search-0.1.0.tgz",
+      "releaseAssetSHA256": "b3545bc63e79ecc1a217d1cf2bea35743e2fe2c0893f701fe7ecb4412f946f9a"
+    }
+  ]
+}

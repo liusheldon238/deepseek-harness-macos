@@ -6,13 +6,14 @@ BUILD_DIR="$ROOT_DIR/build"
 APP_PATH="$BUILD_DIR/DeepSeek Harness.app"
 VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$ROOT_DIR/Resources/Info.plist" 2>/dev/null || true)"
 if [[ -z "$VERSION" || ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  printf 'Warning: could not read CFBundleShortVersionString from Resources/Info.plist; falling back to 0.0.1\n' >&2
-  VERSION="0.0.1"
+  printf 'ERROR: invalid CFBundleShortVersionString in Resources/Info.plist\n' >&2
+  exit 1
 fi
 ZIP_PATH="$BUILD_DIR/DeepSeek-Harness-Desktop-${VERSION}-macos.zip"
 DMG_PATH="$BUILD_DIR/DeepSeek-Harness-Desktop-${VERSION}-macos.dmg"
 
 mkdir -p "$BUILD_DIR"
+"$ROOT_DIR/scripts/verify-bundled-plugins.sh"
 CACHE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/deepseek-harness-swift-cache.XXXXXX")"
 trap 'rm -rf "$CACHE_ROOT"' EXIT
 mkdir -p "$CACHE_ROOT/clang"
@@ -42,7 +43,8 @@ mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_PATH" "$APP_PATH/Contents/MacOS/DeepSeekHarnessDesktop"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
 cp "$ICON_TMP/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
-cp -R "$ROOT_DIR/Resources/dsh-agent-preset-advisor" "$APP_PATH/Contents/Resources/dsh-agent-preset-advisor"
+mkdir -p "$APP_PATH/Contents/Resources/Plugins"
+rsync -a --exclude='.git' --exclude='node_modules' "$ROOT_DIR/Resources/Plugins/" "$APP_PATH/Contents/Resources/Plugins/"
 chmod 0755 "$APP_PATH/Contents/MacOS/DeepSeekHarnessDesktop"
 
 codesign --force --deep --sign - "$APP_PATH"

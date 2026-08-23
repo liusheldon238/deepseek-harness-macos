@@ -1,4 +1,0 @@
-# dsh bundle patch: activate the preset advisor host/client layer.
-- insert:
-    - id: dsh-agent-preset-advisor
-      name: 'dsh-agent-preset-advisor'

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="${DSH_APP_PATH:-$ROOT_DIR/build/DeepSeek Harness.app}"
 PLIST_PATH="$APP_PATH/Contents/Info.plist"
 BIN_PATH="$APP_PATH/Contents/MacOS/DeepSeekHarnessDesktop"
-ADVISOR_DIR="$APP_PATH/Contents/Resources/dsh-agent-preset-advisor"
+PLUGINS_DIR="$APP_PATH/Contents/Resources/Plugins"
 LOG_PATH="$HOME/Library/Application Support/DeepSeek Harness Desktop/dsh.log"
 URL_PATTERN='dsh web: http://127\.0\.0\.1:[0-9]+'
 
@@ -14,13 +14,31 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
-# Bundle structure: executable bit, icon, and the bundled advisor plugin.
+# Bundle structure: executable bit, icon, lock, and both pinned plugins.
 test -x "$BIN_PATH"
 test -f "$APP_PATH/Contents/Resources/AppIcon.icns"
-test -f "$ADVISOR_DIR/package.json"
-test -f "$ADVISOR_DIR/index.js"
-test -f "$ADVISOR_DIR/client.js"
-test -f "$ADVISOR_DIR/cordis.patch.yml"
+test -f "$PLUGINS_DIR/plugins.lock.json"
+/usr/bin/python3 - "$PLUGINS_DIR" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+lock = json.loads((root / "plugins.lock.json").read_text(encoding="utf-8"))
+expected = ["dsh-preset-catalog", "dsh-model-search"]
+if [entry.get("packageName") for entry in lock.get("plugins", [])] != expected:
+    raise SystemExit("ERROR: bundled plugin lock order is invalid")
+for entry in lock["plugins"]:
+    package_root = root / entry["path"]
+    package = json.loads((package_root / "package.json").read_text(encoding="utf-8"))
+    if package.get("name") != entry["packageName"] or package.get("version") != entry["version"]:
+        raise SystemExit(f"ERROR: bundled {entry['packageName']} does not match plugins.lock.json")
+    for filename in ("index.js", "client.js", "cordis.patch.yml"):
+        if not (package_root / filename).is_file():
+            raise SystemExit(f"ERROR: bundled {entry['packageName']} is missing {filename}")
+    if (package_root / ".git").exists():
+        raise SystemExit(f"ERROR: bundled {entry['packageName']} leaks submodule metadata")
+PY
 
 # Plist lint and key/value consistency.
 plutil -lint "$PLIST_PATH"
@@ -44,12 +62,13 @@ ICON_FILE="$(plutil -extract CFBundleIconFile raw -o - "$PLIST_PATH" 2>/dev/null
 codesign --verify --deep --strict "$APP_PATH"
 
 printf 'Smoke test passed for DeepSeek Harness Desktop %s.\n' "$VERSION"
-printf 'Bundle structure, plist, bundled advisor plugin, and code signature are valid.\n'
+printf 'Bundle structure, plist, pinned catalog/model plugins, and code signature are valid.\n'
 printf '\nManual verification — the app starts dsh web with --port 0, so the port is OS-selected at every launch:\n'
 printf '  1. open %q\n' "$APP_PATH"
 printf '  2. Wait for the embedded UI to load, then check the generated log for the dsh web URL:\n'
 printf '     grep -E %q %q\n' "$URL_PATTERN" "$LOG_PATH"
 printf '     Expect a line like: dsh web: http://127.0.0.1:<port>\n'
 printf '  3. Confirm the app window shows the page served at that http://127.0.0.1:<port> URL.\n'
-printf '  4. Quit the app (Cmd+Q) and verify the DSH child process exited:\n'
+printf '  4. Confirm dsh-preset-catalog and dsh-model-search are installed and active.\n'
+printf '  5. Quit the app (Cmd+Q) and verify the DSH child process exited:\n'
 printf '     pgrep -fl %q  (should print nothing)\n' '@deepseek-ai/dsh'
