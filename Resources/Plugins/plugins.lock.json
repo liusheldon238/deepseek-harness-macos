@@ -14,14 +14,14 @@
     },
     {
       "packageName": "dsh-model-search",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "bundleIdentifier": "dsh-model-search",
       "path": "dsh-model-search",
       "repository": "https://github.com/liusheldon238/dsh-model-search",
-      "commit": "c9c43358be5555d07a03e379e6e8c32c2388fcc5",
-      "releaseURL": "https://github.com/liusheldon238/dsh-model-search/releases/tag/v0.1.1",
-      "releaseAssetURL": "https://github.com/liusheldon238/dsh-model-search/releases/download/v0.1.1/dsh-model-search-0.1.1.tgz",
-      "releaseAssetSHA256": "1194ce0cc14d495931d1c0e434f7974d4cb6426bc54d15c111d6adeb20529b51"
+      "commit": "18a0e8668c9fa713a7be1a8071d1a8c315be5108",
+      "releaseURL": "https://github.com/liusheldon238/dsh-model-search/releases/tag/v0.1.2",
+      "releaseAssetURL": "https://github.com/liusheldon238/dsh-model-search/releases/download/v0.1.2/dsh-model-search-0.1.2.tgz",
+      "releaseAssetSHA256": "646aa88e826ccb338b5be30ea6da4f4e73300842e4e9e6702c45303f5737d593"
     }
   ]
 }
