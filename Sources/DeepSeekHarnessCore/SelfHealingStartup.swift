@@ -159,6 +159,9 @@ public enum DSHReleaseSelection {
 }
 
 public enum RegistryPluginUpdate {
+    public static let commandTimeoutSeconds = 20
+    public static let failureBlocksStartup = false
+
     public static func needsUpdate(installedVersion: String?, latestVersion: String) -> Bool {
         guard let installedVersion else { return true }
         return DSHReleaseSelection.isNewer(latestVersion, than: installedVersion)
@@ -338,8 +341,24 @@ public final class SelfHealingStartup {
             guard let latest = await latestNPMVersion(for: name) else { continue }
             let installedVersion = Self.installedPackageVersion(name, in: profileDirectory)
             if !RegistryPluginUpdate.needsUpdate(installedVersion: installedVersion, latestVersion: latest) { continue }
-            let result = try await run(pnpm, arguments: ["update", "\(name)@\(latest)"], cwd: profileDirectory, runtime: runtime)
-            if result == 0 { updated.append(name) }
+            do {
+                let result = try await run(
+                    pnpm,
+                    arguments: ["update", "\(name)@\(latest)"],
+                    cwd: profileDirectory,
+                    runtime: runtime,
+                    timeout: .seconds(RegistryPluginUpdate.commandTimeoutSeconds)
+                )
+                if result == 0 {
+                    updated.append(name)
+                } else {
+                    processManager.appendDiagnostic("插件 \(name) 更新到 \(latest) 失败（退出码 \(result)），继续使用本地版本 \(installedVersion ?? "未知") 启动。")
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                processManager.appendDiagnostic("插件 \(name) 更新到 \(latest) 超时或失败，继续使用本地版本 \(installedVersion ?? "未知") 启动：\(error.localizedDescription)")
+            }
         }
         _ = dshPackage
         return updated
@@ -386,14 +405,14 @@ public final class SelfHealingStartup {
         return json["version"] as? String
     }
 
-    private func run(_ executable: URL, arguments: [String], cwd: URL, runtime: NodeRuntime) async throws -> Int32 {
+    private func run(_ executable: URL, arguments: [String], cwd: URL, runtime: NodeRuntime, timeout: Duration = .seconds(120)) async throws -> Int32 {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(runtime.nodeURL.deletingLastPathComponent().path):\(environment["PATH"] ?? "")"
         let updateLogURL = supportURL.appendingPathComponent("update.log")
         if !fileManager.fileExists(atPath: updateLogURL.path) { fileManager.createFile(atPath: updateLogURL.path, contents: nil) }
         let updateHandle = try? FileHandle(forWritingTo: updateLogURL)
         _ = try? updateHandle?.seekToEnd()
-        let status = try await ManagedProcess.run(executable: executable, arguments: arguments, environment: environment, currentDirectory: cwd, output: updateHandle, timeout: .seconds(120))
+        let status = try await ManagedProcess.run(executable: executable, arguments: arguments, environment: environment, currentDirectory: cwd, output: updateHandle, timeout: timeout)
         try? updateHandle?.close()
         return status
     }

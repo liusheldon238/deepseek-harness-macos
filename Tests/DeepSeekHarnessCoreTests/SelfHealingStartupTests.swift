@@ -29,6 +29,11 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertTrue(RegistryPluginUpdate.needsUpdate(installedVersion: nil, latestVersion: "0.26.0"))
     }
 
+    func testRegistryPluginUpdatesAreBoundedAndDoNotBlockStartupOnNetworkFailure() {
+        XCTAssertEqual(RegistryPluginUpdate.commandTimeoutSeconds, 20)
+        XCTAssertFalse(RegistryPluginUpdate.failureBlocksStartup)
+    }
+
     func testClientPluginFailureParsesBrowserRenderedError() {
         let text = """
         Failed to load plugins
