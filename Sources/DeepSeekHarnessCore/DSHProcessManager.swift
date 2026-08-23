@@ -47,7 +47,10 @@ public final class DSHProcessManager {
         // The first launch can install several hundred MB of DSH dependencies
         // into the app-local npm cache. Keep the process alive long enough for
         // that one-time provisioning to finish.
-        let deadline = Date().addingTimeInterval(300)
+        // Do not leave the desktop shell apparently frozen while npm resolves
+        // a fresh prerelease graph. A later retry can resume from the cache,
+        // and SelfHealingStartup will fall back to the last verified DSH.
+        let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
             if let output = try? String(contentsOf: logURL, encoding: .utf8), let url = DSHOutputParser.url(from: output) {
                 do {
