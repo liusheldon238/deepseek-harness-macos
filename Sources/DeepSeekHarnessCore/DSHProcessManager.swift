@@ -19,11 +19,15 @@ public final class DSHProcessManager {
         backendRegistry = OwnedBackendRegistry(recordURL: supportURL.appendingPathComponent("backend.json"), supportDirectory: supportURL)
     }
 
-    public func start(using runtime: NodeRuntime, dshPackage: String = "@deepseek-ai/dsh@0.1.0-rc.6", localDSHCLI: URL? = nil) async throws -> URL {
+    public func prepareForProfileMutation() throws {
         stop()
         if try backendRegistry.reclaimStaleBackend() {
             appendDiagnostic("已验证并回收 Desktop 遗留的 DSH 后台进程。")
         }
+    }
+
+    public func start(using runtime: NodeRuntime, dshPackage: String = "@deepseek-ai/dsh@0.1.0-rc.6", localDSHCLI: URL? = nil) async throws -> URL {
+        try prepareForProfileMutation()
         try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: logURL)

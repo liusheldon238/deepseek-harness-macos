@@ -48,6 +48,27 @@ final class BundledPluginReadinessTests: XCTestCase {
         XCTAssertTrue(BundledPluginReadiness.needsInstall(descriptor, in: profile))
     }
 
+    func testRelativeFileDependencyResolvesAgainstProfileDirectory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let profile = root.appendingPathComponent("profiles/web")
+        let plugin = root.appendingPathComponent("bundle/dsh-model-provider")
+        try FileManager.default.createDirectory(at: profile.appendingPathComponent("node_modules/dsh-model-provider"), withIntermediateDirectories: true)
+        let manifest: [String: Any] = [
+            "dependencies": ["dsh-model-provider": "file:../../bundle/dsh-model-provider"],
+            "dsh": ["profile": ["bundles": ["dsh-model-provider"]]],
+        ]
+        try JSONSerialization.data(withJSONObject: manifest).write(to: profile.appendingPathComponent("package.json"))
+        try JSONSerialization.data(withJSONObject: ["name": "dsh-model-provider", "version": "0.1.0"]).write(to: profile.appendingPathComponent("node_modules/dsh-model-provider/package.json"))
+        let relativeDescriptor = BundledPluginDescriptor(
+            packageName: "dsh-model-provider",
+            packageSpec: "file:\(plugin.path)",
+            expectedVersion: "0.1.0",
+            bundleIdentifier: "dsh-model-provider"
+        )
+
+        XCTAssertFalse(BundledPluginReadiness.needsInstall(relativeDescriptor, in: profile))
+    }
+
     func testMissingManifestDependencyTriggersReinstall() throws {
         let profile = try makeProfile(dependency: nil)
 

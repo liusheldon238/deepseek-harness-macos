@@ -223,6 +223,7 @@ public final class SelfHealingStartup {
     }
 
     public func start(progress: @escaping @MainActor (StartupPhase, String) -> Void = { _, _ in }) async throws -> (URL, StartupReport) {
+        try processManager.prepareForProfileMutation()
         progress(.node, "只接受与主机架构匹配的 Node.js")
         let runtime = try await runtimeManager.resolve()
         progress(.dsh, "Node.js \(runtime.version)（\(runtime.architecture.rawValue)）")

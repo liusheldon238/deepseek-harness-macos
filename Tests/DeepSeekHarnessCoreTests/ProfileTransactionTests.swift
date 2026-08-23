@@ -28,6 +28,21 @@ final class ProfileTransactionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: profile.path))
     }
 
+    func testRestoreRecoversPluginRemovedBeforeFailedReplacement() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let profile = root.appendingPathComponent("profiles/web")
+        let snapshots = root.appendingPathComponent("snapshots")
+        let plugin = profile.appendingPathComponent("node_modules/dsh-model-search")
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        try Data("old verified plugin".utf8).write(to: plugin.appendingPathComponent("client.js"))
+        let transaction = try ProfileTransaction.begin(profileDirectory: profile, snapshotsDirectory: snapshots)
+        try FileManager.default.removeItem(at: plugin)
+
+        try transaction.restore()
+
+        XCTAssertEqual(try String(contentsOf: plugin.appendingPathComponent("client.js"), encoding: .utf8), "old verified plugin")
+    }
+
     private func write(_ value: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(value.utf8).write(to: url)

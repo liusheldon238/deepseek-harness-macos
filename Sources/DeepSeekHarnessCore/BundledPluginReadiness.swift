@@ -47,7 +47,7 @@ public enum BundledPluginReadiness {
         guard let manifest = object(at: profileDirectory.appendingPathComponent("package.json")),
               let dependencies = manifest["dependencies"] as? [String: Any],
               let installedSpec = dependencies[descriptor.packageName] as? String,
-              dependency(installedSpec, matches: descriptor.packageSpec),
+              dependency(installedSpec, matches: descriptor.packageSpec, relativeTo: profileDirectory),
               let installed = object(at: profileDirectory.appendingPathComponent("node_modules/\(descriptor.packageName)/package.json")),
               installed["name"] as? String == descriptor.packageName,
               version(installed["version"] as? String, matches: descriptor.expectedVersion),
@@ -63,19 +63,21 @@ public enum BundledPluginReadiness {
         return expected == nil || installed == expected
     }
 
-    private static func dependency(_ installed: String, matches expected: String) -> Bool {
+    private static func dependency(_ installed: String, matches expected: String, relativeTo profileDirectory: URL) -> Bool {
         if expected.hasPrefix("file:") {
             guard installed.hasPrefix("file:") else { return false }
-            return normalizedFilePath(installed) == normalizedFilePath(expected)
+            return normalizedFilePath(installed, relativeTo: profileDirectory) == normalizedFilePath(expected, relativeTo: profileDirectory)
         }
         return !installed.hasPrefix("file:")
     }
 
-    private static func normalizedFilePath(_ spec: String) -> String {
+    private static func normalizedFilePath(_ spec: String, relativeTo profileDirectory: URL) -> String {
         let raw = String(spec.dropFirst("file:".count))
         let decoded = raw.removingPercentEncoding ?? raw
-        guard decoded.hasPrefix("/") else { return decoded }
-        return URL(fileURLWithPath: decoded).standardizedFileURL.path
+        let url = decoded.hasPrefix("/")
+            ? URL(fileURLWithPath: decoded)
+            : profileDirectory.appendingPathComponent(decoded)
+        return url.standardizedFileURL.path
     }
 
     private static func object(at url: URL) -> [String: Any]? {
