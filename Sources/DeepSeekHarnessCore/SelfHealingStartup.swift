@@ -158,6 +158,13 @@ public enum DSHReleaseSelection {
     }
 }
 
+public enum RegistryPluginUpdate {
+    public static func needsUpdate(installedVersion: String?, latestVersion: String) -> Bool {
+        guard let installedVersion else { return true }
+        return DSHReleaseSelection.isNewer(latestVersion, than: installedVersion)
+    }
+}
+
 public struct DSHLocalRuntime: Sendable, Equatable {
     public let version: String
     public let cliURL: URL
@@ -329,7 +336,8 @@ public final class SelfHealingStartup {
         var updated: [String] = []
         for name in names {
             guard let latest = await latestNPMVersion(for: name) else { continue }
-            if dependencies[name] == latest { continue }
+            let installedVersion = Self.installedPackageVersion(name, in: profileDirectory)
+            if !RegistryPluginUpdate.needsUpdate(installedVersion: installedVersion, latestVersion: latest) { continue }
             let result = try await run(pnpm, arguments: ["update", "\(name)@\(latest)"], cwd: profileDirectory, runtime: runtime)
             if result == 0 { updated.append(name) }
         }
@@ -358,6 +366,13 @@ public final class SelfHealingStartup {
     private static func packageVersion(_ package: String) -> String? {
         guard let marker = package.lastIndex(of: "@"), marker != package.startIndex else { return nil }
         return String(package[package.index(after: marker)...])
+    }
+
+    private static func installedPackageVersion(_ packageName: String, in profileDirectory: URL) -> String? {
+        let manifestURL = profileDirectory.appendingPathComponent("node_modules/\(packageName)/package.json")
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return manifest["version"] as? String
     }
 
     private func latestNPMVersion(for packageName: String) async -> String? {

@@ -22,6 +22,13 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertNil(DSHReleaseSelection.latest(githubTag: "not-a-version", npmVersion: nil))
     }
 
+    func testRegistryPluginUpdateUsesInstalledPackageVersionNotManifestRange() {
+        XCTAssertFalse(RegistryPluginUpdate.needsUpdate(installedVersion: "0.26.0", latestVersion: "0.26.0"))
+        XCTAssertTrue(RegistryPluginUpdate.needsUpdate(installedVersion: "0.25.3", latestVersion: "0.26.0"))
+        XCTAssertFalse(RegistryPluginUpdate.needsUpdate(installedVersion: "0.27.0", latestVersion: "0.26.0"))
+        XCTAssertTrue(RegistryPluginUpdate.needsUpdate(installedVersion: nil, latestVersion: "0.26.0"))
+    }
+
     func testClientPluginFailureParsesBrowserRenderedError() {
         let text = """
         Failed to load plugins
