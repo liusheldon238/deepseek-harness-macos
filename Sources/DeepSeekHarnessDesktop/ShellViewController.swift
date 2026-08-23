@@ -11,11 +11,15 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     private let detailLabel = NSTextField(labelWithString: "")
     private let errorLogView = NSTextView()
     private let errorLogScrollView = NSScrollView()
+    private let logToggleButton = NSButton(title: "展开启动日志", target: nil, action: nil)
+    private let copyLogButton = NSButton(title: "复制日志", target: nil, action: nil)
     private let progress = NSProgressIndicator()
     private let retryButton = NSButton(title: "重试", target: nil, action: nil)
     private let webView: WKWebView
     private var started = false
     private var startupTask: Task<Void, Never>?
+    private var logTimer: Timer?
+    private var logExpanded = false
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         let configuration = WKWebViewConfiguration()
@@ -60,7 +64,19 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         errorLogScrollView.isHidden = true
         errorLogScrollView.heightAnchor.constraint(equalToConstant: 150).isActive = true
 
-        let status = NSStackView(views: [logoView, statusLabel, detailLabel, progress, retryButton, errorLogScrollView])
+        logToggleButton.bezelStyle = .inline
+        logToggleButton.isBordered = false
+        logToggleButton.contentTintColor = .secondaryLabelColor
+        logToggleButton.target = self
+        logToggleButton.action = #selector(toggleLogs)
+        copyLogButton.bezelStyle = .inline
+        copyLogButton.target = self
+        copyLogButton.action = #selector(copyLogs)
+        let logActions = NSStackView(views: [logToggleButton, copyLogButton])
+        logActions.spacing = 10
+        logActions.isHidden = true
+
+        let status = NSStackView(views: [logoView, statusLabel, detailLabel, progress, retryButton, logActions, errorLogScrollView])
         status.orientation = .vertical
         status.alignment = .centerX
         status.spacing = 12
@@ -74,6 +90,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         progress.startAnimation(nil)
         retryButton.isHidden = true
         errorLogScrollView.isHidden = true
+        logToggleButton.isHidden = true
+        copyLogButton.isHidden = true
         retryButton.target = self
         retryButton.action = #selector(retry)
 
@@ -113,11 +131,19 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         statusLabel.isHidden = false
         detailLabel.isHidden = false
         errorLogScrollView.isHidden = true
+        logToggleButton.isHidden = false
+        copyLogButton.isHidden = false
+        logExpanded = false
+        updateLogVisibility()
         errorLogView.string = ""
         statusLabel.stringValue = "正在扫描 Node.js…"
         detailLabel.stringValue = "将优先使用本机兼容环境；缺失时自动下载。"
 
         startupTask?.cancel()
+        logTimer?.invalidate()
+        logTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshLog() }
+        }
         startupTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -139,6 +165,10 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
                 detailLabel.isHidden = true
                 retryButton.isHidden = true
                 errorLogScrollView.isHidden = true
+                logToggleButton.isHidden = true
+                copyLogButton.isHidden = true
+                logTimer?.invalidate()
+                logTimer = nil
                 webView.isHidden = false
                 webView.load(URLRequest(url: url))
             } catch {
@@ -161,13 +191,45 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         detailLabel.stringValue = error.localizedDescription
         let log = dshManager.latestLog.trimmingCharacters(in: .whitespacesAndNewlines)
         errorLogView.string = log.isEmpty ? "暂无后台输出。请点击“重试”再次启动。" : log
-        errorLogScrollView.isHidden = false
+        logToggleButton.isHidden = false
+        copyLogButton.isHidden = false
+        logExpanded = true
+        updateLogVisibility()
+        logTimer?.invalidate()
+        logTimer = nil
+    }
+
+    @objc private func toggleLogs() {
+        logExpanded.toggle()
+        updateLogVisibility()
+    }
+
+    @objc private func copyLogs() {
+        refreshLog()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(errorLogView.string, forType: .string)
+        copyLogButton.title = "已复制"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.copyLogButton.title = "复制日志" }
+    }
+
+    private func refreshLog() {
+        let log = dshManager.latestLog
+        guard !log.isEmpty else { return }
+        errorLogView.string = log
+        errorLogView.scrollToEndOfDocument(nil)
+    }
+
+    private func updateLogVisibility() {
+        errorLogScrollView.isHidden = !logExpanded
+        logToggleButton.title = logExpanded ? "收起启动日志" : "展开启动日志"
     }
 
     func stopBackend() {
         startupTask?.cancel()
         startupTask = nil
         dshManager.stop()
+        logTimer?.invalidate()
+        logTimer = nil
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {

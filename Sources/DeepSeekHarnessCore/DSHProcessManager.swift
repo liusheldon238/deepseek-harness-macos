@@ -93,7 +93,17 @@ public final class DSHProcessManager {
     public var isRunning: Bool { process?.isRunning == true }
     public var logFileURL: URL { logURL }
     public var latestLog: String {
-        (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+        var parts: [String] = []
+        if let log = try? String(contentsOf: logURL, encoding: .utf8), !log.isEmpty { parts.append(log) }
+        let npmLogDirectory = logURL.deletingLastPathComponent().appendingPathComponent("npm-cache/_logs", isDirectory: true)
+        if let newest = (try? FileManager.default.contentsOfDirectory(at: npmLogDirectory, includingPropertiesForKeys: [.contentModificationDateKey]))?
+            .filter({ $0.pathExtension == "log" })
+            .sorted(by: { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) })
+            .first,
+           let npmLog = try? String(contentsOf: newest, encoding: .utf8), !npmLog.isEmpty {
+            parts.append("[npm 调试日志]\n" + String(npmLog.suffix(12000)))
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     private func installEnvironment(using runtime: NodeRuntime) throws -> [String: String] {
