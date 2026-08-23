@@ -14,7 +14,7 @@ public enum StartupLogPresentation: Sendable {
     case failed
 
     public var showsControls: Bool { self != .running }
-    public var expandsLog: Bool { self == .failed }
+    public var expandsLog: Bool { self != .running }
 }
 
 public struct ClientPluginFailure: Sendable, Equatable {
@@ -90,6 +90,26 @@ public enum StartupSemVer {
     }
 }
 
+public struct DSHLocalRuntime: Sendable, Equatable {
+    public let version: String
+    public let cliURL: URL
+
+    public static func inspect(directory: URL, fileManager: FileManager = .default) -> DSHLocalRuntime? {
+        let package = directory.appendingPathComponent("node_modules/@deepseek-ai/dsh", isDirectory: true)
+        let manifestURL = package.appendingPathComponent("package.json")
+        let cliURL = package.appendingPathComponent("lib/bin.js")
+        guard fileManager.fileExists(atPath: cliURL.path),
+              let data = try? Data(contentsOf: manifestURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = json["version"] as? String else { return nil }
+        return DSHLocalRuntime(version: version, cliURL: cliURL)
+    }
+
+    public static func needsInstall(local: DSHLocalRuntime?, latestVersion: String) -> Bool {
+        local?.version != latestVersion
+    }
+}
+
 @MainActor
 public final class SelfHealingStartup {
     public static let fallbackDSHPackage = "@deepseek-ai/dsh@0.1.0-rc.6"
@@ -113,14 +133,29 @@ public final class SelfHealingStartup {
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
         let snapshot = try makeSnapshot(profileDirectory: profileDirectory)
         let dshPackage = await latestDSHPackage() ?? Self.fallbackDSHPackage
-        progress(.plugins, "目标 DSH：\(dshPackage)")
-        var updated = try await updateRegistryPlugins(profileDirectory: profileDirectory, runtime: runtime, dshPackage: dshPackage)
+        let runtimeDirectory = supportURL.appendingPathComponent("dsh-runtime", isDirectory: true)
+        var localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, fileManager: fileManager)
+        if let latestVersion = Self.packageVersion(dshPackage), DSHLocalRuntime.needsInstall(local: localDSH, latestVersion: latestVersion), let pnpm = pnpmURL() {
+            progress(.dsh, "发现 DSH \(latestVersion)，正在更新一次性本地运行时…")
+            try fileManager.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
+            let result = try await run(pnpm, arguments: ["add", "--dir", runtimeDirectory.path, dshPackage], cwd: supportURL, runtime: runtime)
+            if result == 0 {
+                localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, fileManager: fileManager)
+                processManager.appendDiagnostic("DSH 本地运行时已更新到 \(localDSH?.version ?? latestVersion)。")
+            } else {
+                processManager.appendDiagnostic("DSH \(latestVersion) 更新失败，继续使用最后一次可用的本地版本。")
+            }
+        }
+        let selectedPackage = localDSH.map { "@deepseek-ai/dsh@\($0.version)" } ?? dshPackage
+        progress(.plugins, "本地 DSH：\(selectedPackage)")
+        var updated = try await updateRegistryPlugins(profileDirectory: profileDirectory, runtime: runtime, dshPackage: selectedPackage)
         var disabled: [String] = []
-        var candidatePackage = dshPackage
+        var candidatePackage = selectedPackage
+        var candidateLocalCLI = localDSH?.cliURL
         for _ in 0..<8 {
             do {
                 progress(.launching, candidatePackage)
-                let url = try await processManager.start(using: runtime, dshPackage: candidatePackage)
+                let url = try await processManager.start(using: runtime, dshPackage: candidatePackage, localDSHCLI: candidateLocalCLI)
                 return (url, StartupReport(runtime: runtime, dshPackage: candidatePackage, updatedPlugins: updated, disabledPlugins: disabled))
             } catch let error as RuntimeError {
                 guard case .pluginConflict(let detail) = error else {
@@ -128,6 +163,7 @@ public final class SelfHealingStartup {
                     try? snapshot.restore(using: fileManager)
                     if candidatePackage != Self.fallbackDSHPackage {
                         candidatePackage = Self.fallbackDSHPackage
+                        candidateLocalCLI = nil
                         updated = []
                         continue
                     }
@@ -200,7 +236,9 @@ public final class SelfHealingStartup {
         guard !names.isEmpty, let pnpm = pnpmURL() else { return [] }
         var updated: [String] = []
         for name in names {
-            let result = try await run(pnpm, arguments: ["update", "--latest", name], cwd: profileDirectory, runtime: runtime)
+            guard let latest = await latestNPMVersion(for: name) else { continue }
+            if dependencies[name] == latest { continue }
+            let result = try await run(pnpm, arguments: ["update", "\(name)@\(latest)"], cwd: profileDirectory, runtime: runtime)
             if result == 0 { updated.append(name) }
         }
         _ = dshPackage
@@ -231,6 +269,22 @@ public final class SelfHealingStartup {
         ["/opt/homebrew/bin/pnpm", "/usr/local/bin/pnpm", fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/pnpm/pnpm").path].map(URL.init(fileURLWithPath:)).first { fileManager.isExecutableFile(atPath: $0.path) }
     }
 
+    private static func packageVersion(_ package: String) -> String? {
+        guard let marker = package.lastIndex(of: "@"), marker != package.startIndex else { return nil }
+        return String(package[package.index(after: marker)...])
+    }
+
+    private func latestNPMVersion(for packageName: String) async -> String? {
+        let escaped = packageName.replacingOccurrences(of: "/", with: "%2F")
+        guard let url = URL(string: "https://registry.npmjs.org/\(escaped)/latest") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 4
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["version"] as? String
+    }
+
     private func run(_ executable: URL, arguments: [String], cwd: URL, runtime: NodeRuntime) async throws -> Int32 {
         let process = Process()
         process.executableURL = executable
@@ -239,8 +293,15 @@ public final class SelfHealingStartup {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "\(executable.deletingLastPathComponent().path):\(runtime.nodeURL.deletingLastPathComponent().path):\(environment["PATH"] ?? "")"
         process.environment = environment
+        let updateLogURL = supportURL.appendingPathComponent("update.log")
+        if !fileManager.fileExists(atPath: updateLogURL.path) { fileManager.createFile(atPath: updateLogURL.path, contents: nil) }
+        let updateHandle = try? FileHandle(forWritingTo: updateLogURL)
+        _ = try? updateHandle?.seekToEnd()
+        process.standardOutput = updateHandle
+        process.standardError = updateHandle
         try process.run()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in process.terminationHandler = { _ in continuation.resume() } }
+        try? updateHandle?.close()
         return process.terminationStatus
     }
 }

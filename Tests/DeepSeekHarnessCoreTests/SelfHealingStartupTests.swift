@@ -40,7 +40,21 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertTrue(StartupLogPresentation.failed.showsControls)
         XCTAssertFalse(StartupLogPresentation.running.showsControls)
         XCTAssertTrue(StartupLogPresentation.failed.expandsLog)
-        XCTAssertFalse(StartupLogPresentation.starting.expandsLog)
+        XCTAssertTrue(StartupLogPresentation.starting.expandsLog)
+    }
+
+    func testMatchingLocalDSHVersionUsesStableCLIWithoutInstall() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let package = root.appendingPathComponent("node_modules/@deepseek-ai/dsh")
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("lib"), withIntermediateDirectories: true)
+        try Data(#"{"version":"0.1.1-rc.2"}"#.utf8).write(to: package.appendingPathComponent("package.json"))
+        try Data("#!/usr/bin/env node".utf8).write(to: package.appendingPathComponent("lib/bin.js"))
+
+        let local = DSHLocalRuntime.inspect(directory: root)
+        XCTAssertEqual(local?.version, "0.1.1-rc.2")
+        XCTAssertEqual(local?.cliURL, package.appendingPathComponent("lib/bin.js"))
+        XCTAssertFalse(DSHLocalRuntime.needsInstall(local: local, latestVersion: "0.1.1-rc.2"))
+        XCTAssertTrue(DSHLocalRuntime.needsInstall(local: local, latestVersion: "0.1.2"))
     }
 
     @MainActor

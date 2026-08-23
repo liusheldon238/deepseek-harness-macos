@@ -56,16 +56,25 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         errorLogView.isEditable = false
         errorLogView.isSelectable = true
         errorLogView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        errorLogView.textColor = .systemRed
-        errorLogView.backgroundColor = NSColor.systemRed.withAlphaComponent(0.06)
+        errorLogView.textColor = .secondaryLabelColor
+        errorLogView.backgroundColor = .clear
+        errorLogView.isHorizontallyResizable = false
+        errorLogView.textContainer?.widthTracksTextView = true
+        errorLogView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         errorLogView.textContainerInset = NSSize(width: 10, height: 8)
         errorLogScrollView.documentView = errorLogView
         errorLogScrollView.hasVerticalScroller = true
-        errorLogScrollView.hasHorizontalScroller = true
-        errorLogScrollView.borderType = .bezelBorder
+        errorLogScrollView.hasHorizontalScroller = false
+        errorLogScrollView.autohidesScrollers = true
+        errorLogScrollView.scrollerStyle = .overlay
+        errorLogScrollView.drawsBackground = false
+        errorLogScrollView.borderType = .noBorder
         errorLogScrollView.translatesAutoresizingMaskIntoConstraints = false
         errorLogScrollView.isHidden = true
-        errorLogScrollView.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        NSLayoutConstraint.activate([
+            errorLogScrollView.widthAnchor.constraint(equalToConstant: 760),
+            errorLogScrollView.heightAnchor.constraint(equalToConstant: 190)
+        ])
 
         logToggleButton.bezelStyle = .inline
         logToggleButton.isBordered = false
@@ -133,9 +142,10 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         logoView.isHidden = false
         statusLabel.isHidden = false
         detailLabel.isHidden = false
-        logExpanded = false
+        logExpanded = true
         applyLogPresentation(.starting)
         errorLogView.string = ""
+        errorLogView.textColor = .secondaryLabelColor
         statusLabel.stringValue = "正在扫描 Node.js…"
         detailLabel.stringValue = "将优先使用本机兼容环境；缺失时自动下载。"
 
@@ -191,6 +201,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         detailLabel.stringValue = error.localizedDescription
         let log = dshManager.latestLog.trimmingCharacters(in: .whitespacesAndNewlines)
         errorLogView.string = log.isEmpty ? "暂无后台输出。请点击“重试”再次启动。" : log
+        errorLogView.textColor = .systemRed
         logExpanded = true
         applyLogPresentation(.failed)
         logTimer?.invalidate()

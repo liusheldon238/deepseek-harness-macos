@@ -15,7 +15,7 @@ public final class DSHProcessManager {
         self.logURL = logURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("DeepSeek Harness Desktop/dsh.log")
     }
 
-    public func start(using runtime: NodeRuntime, dshPackage: String = "@deepseek-ai/dsh@0.1.0-rc.6") async throws -> URL {
+    public func start(using runtime: NodeRuntime, dshPackage: String = "@deepseek-ai/dsh@0.1.0-rc.6", localDSHCLI: URL? = nil) async throws -> URL {
         stop()
         try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
@@ -25,14 +25,19 @@ public final class DSHProcessManager {
         let environment: [String: String]
         do {
             environment = try installEnvironment(using: runtime)
-        try await ensureMarketPlugin(using: runtime, environment: environment, output: handle, dshPackage: dshPackage)
+        try await ensureMarketPlugin(using: runtime, environment: environment, output: handle, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
         } catch {
             stop()
             throw error
         }
         let process = Process()
-        process.executableURL = runtime.npxURL
-        process.arguments = ["--yes", dshPackage, "web", "--host", "127.0.0.1", "--port", "0"]
+        if let localDSHCLI {
+            process.executableURL = runtime.nodeURL
+            process.arguments = [localDSHCLI.path, "web", "--host", "127.0.0.1", "--port", "0"]
+        } else {
+            process.executableURL = runtime.npxURL
+            process.arguments = ["--yes", dshPackage, "web", "--host", "127.0.0.1", "--port", "0"]
+        }
         process.environment = environment
         process.standardOutput = handle
         process.standardError = handle
@@ -98,6 +103,10 @@ public final class DSHProcessManager {
         if let desktopLog = try? String(contentsOf: desktopLogURL, encoding: .utf8), !desktopLog.isEmpty {
             parts.append("[Desktop 自修复日志]\n" + String(desktopLog.suffix(12000)))
         }
+        let updateLogURL = logURL.deletingLastPathComponent().appendingPathComponent("update.log")
+        if let updateLog = try? String(contentsOf: updateLogURL, encoding: .utf8), !updateLog.isEmpty {
+            parts.append("[DSH / 插件更新日志]\n" + String(updateLog.suffix(12000)))
+        }
         if let log = try? String(contentsOf: logURL, encoding: .utf8), !log.isEmpty { parts.append(log) }
         let npmLogDirectory = logURL.deletingLastPathComponent().appendingPathComponent("npm-cache/_logs", isDirectory: true)
         if let newest = (try? FileManager.default.contentsOfDirectory(at: npmLogDirectory, includingPropertiesForKeys: [.contentModificationDateKey]))?
@@ -138,19 +147,19 @@ public final class DSHProcessManager {
         return environment
     }
 
-    private func ensureMarketPlugin(using runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String) async throws {
+    private func ensureMarketPlugin(using runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
         let supportURL = logURL.deletingLastPathComponent()
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
-        try await installPluginIfNeeded(Self.marketPackage, packageName: "dshmarket", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage)
+        try await installPluginIfNeeded(Self.marketPackage, packageName: "dshmarket", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
         let bundledAdvisor = Bundle.main.resourceURL?.appendingPathComponent("dsh-agent-preset-advisor", isDirectory: true)
         let developmentAdvisor = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/dsh-agent-preset-advisor", isDirectory: true)
         guard let advisorURL = [bundledAdvisor, developmentAdvisor].compactMap({ $0 }).first(where: {
             FileManager.default.fileExists(atPath: $0.appendingPathComponent("package.json").path)
         }) else { return }
-        try await installPluginIfNeeded("file:\(advisorURL.path)", packageName: "dsh-agent-preset-advisor", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage)
+        try await installPluginIfNeeded("file:\(advisorURL.path)", packageName: "dsh-agent-preset-advisor", profileDirectory: profileDirectory, runtime: runtime, environment: environment, output: output, dshPackage: dshPackage, localDSHCLI: localDSHCLI)
     }
 
-    private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String) async throws {
+    private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
         let manifestURL = profileDirectory.appendingPathComponent("package.json")
         let installedDirectory = profileDirectory.appendingPathComponent("node_modules/\(packageName)")
         if let data = try? Data(contentsOf: manifestURL),
@@ -161,8 +170,13 @@ public final class DSHProcessManager {
            (!packageSpec.hasPrefix("file:") || installedSpec == packageSpec || bundledPackageMatches(installedDirectory, packageSpec: packageSpec)) { return }
 
         let process = Process()
-        process.executableURL = runtime.npxURL
-        process.arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", packageSpec]
+        if let localDSHCLI {
+            process.executableURL = runtime.nodeURL
+            process.arguments = [localDSHCLI.path, "plugin", "--profile", "web", "add", packageSpec]
+        } else {
+            process.executableURL = runtime.npxURL
+            process.arguments = ["--yes", dshPackage, "plugin", "--profile", "web", "add", packageSpec]
+        }
         process.environment = environment
         process.standardOutput = output
         process.standardError = output
