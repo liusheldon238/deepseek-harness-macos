@@ -28,10 +28,9 @@ public struct OwnedBackendRecord: Codable, Equatable, Sendable {
 
     public func matches(_ current: BackendProcessIdentity, supportDirectory: URL) -> Bool {
         let supportPath = supportDirectory.standardizedFileURL.resolvingSymlinksInPath().path
-        let executable = URL(fileURLWithPath: current.executablePath).standardizedFileURL.resolvingSymlinksInPath().path
         return current == identity
             && current.processGroupID == current.pid
-            && (executable == supportPath || executable.hasPrefix(supportPath + "/"))
+            && current.command.contains(supportPath + "/")
             && current.command.contains("/node_modules/@deepseek-ai/dsh/lib/bin.js web ")
             && current.command.contains("--host 127.0.0.1")
             && current.command.contains("--port 0")

@@ -8,6 +8,20 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertNil(StartupSemVer.latest(["bad", "0.2"]))
     }
 
+    func testDSHReleaseSelectionDoesNotDowngradeFromNewerNPMPrerelease() {
+        XCTAssertEqual(
+            DSHReleaseSelection.latest(githubTag: "v0.1.0-rc.6", npmVersion: "0.1.1-rc.2"),
+            "0.1.1-rc.2"
+        )
+    }
+
+    func testDSHReleaseSelectionUsesNewerGitHubOrAvailableFallback() {
+        XCTAssertEqual(DSHReleaseSelection.latest(githubTag: "v0.2.0-rc.1", npmVersion: "0.1.9"), "0.2.0-rc.1")
+        XCTAssertEqual(DSHReleaseSelection.latest(githubTag: nil, npmVersion: "0.1.1-rc.2"), "0.1.1-rc.2")
+        XCTAssertEqual(DSHReleaseSelection.latest(githubTag: "v0.1.0-rc.6", npmVersion: nil), "0.1.0-rc.6")
+        XCTAssertNil(DSHReleaseSelection.latest(githubTag: "not-a-version", npmVersion: nil))
+    }
+
     func testClientPluginFailureParsesBrowserRenderedError() {
         let text = """
         Failed to load plugins
@@ -43,6 +57,7 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertEqual(local?.cliURL, package.appendingPathComponent("lib/bin.js"))
         XCTAssertFalse(DSHLocalRuntime.needsInstall(local: local, latestVersion: "0.1.1-rc.2"))
         XCTAssertTrue(DSHLocalRuntime.needsInstall(local: local, latestVersion: "0.1.2"))
+        XCTAssertFalse(DSHLocalRuntime.needsInstall(local: local, latestVersion: "0.1.0-rc.6"))
     }
 
     func testLocalDSHRuntimeRejectsMissingOrMismatchedArchitectureMarker() throws {

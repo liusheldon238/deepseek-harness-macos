@@ -85,6 +85,79 @@ public enum StartupSemVer {
     }
 }
 
+public enum DSHReleaseSelection {
+    private struct Version: Comparable {
+        let major: Int
+        let minor: Int
+        let patch: Int
+        let prerelease: [String]?
+        let original: String
+
+        init?(_ value: String) {
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pattern = #"^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$"#
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: normalized, range: NSRange(normalized.startIndex..., in: normalized)),
+                  let majorRange = Range(match.range(at: 1), in: normalized),
+                  let minorRange = Range(match.range(at: 2), in: normalized),
+                  let patchRange = Range(match.range(at: 3), in: normalized),
+                  let major = Int(normalized[majorRange]),
+                  let minor = Int(normalized[minorRange]),
+                  let patch = Int(normalized[patchRange]) else { return nil }
+            self.major = major
+            self.minor = minor
+            self.patch = patch
+            if let range = Range(match.range(at: 4), in: normalized) {
+                let identifiers = normalized[range].split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+                guard !identifiers.isEmpty, identifiers.allSatisfy({ !$0.isEmpty }) else { return nil }
+                prerelease = identifiers
+            } else {
+                prerelease = nil
+            }
+            original = normalized.hasPrefix("v") || normalized.hasPrefix("V") ? String(normalized.dropFirst()) : normalized
+        }
+
+        static func < (lhs: Version, rhs: Version) -> Bool {
+            if lhs.major != rhs.major { return lhs.major < rhs.major }
+            if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
+            if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
+            switch (lhs.prerelease, rhs.prerelease) {
+            case (nil, nil): return false
+            case (nil, _): return false
+            case (_, nil): return true
+            case let (left?, right?):
+                for index in 0..<min(left.count, right.count) {
+                    if left[index] == right[index] { continue }
+                    let leftNumber = Int(left[index])
+                    let rightNumber = Int(right[index])
+                    switch (leftNumber, rightNumber) {
+                    case let (l?, r?): return l < r
+                    case (_?, nil): return true
+                    case (nil, _?): return false
+                    case (nil, nil): return left[index] < right[index]
+                    }
+                }
+                return left.count < right.count
+            }
+        }
+    }
+
+    public static func latest(githubTag: String?, npmVersion: String?) -> String? {
+        [githubTag, npmVersion]
+            .compactMap { $0 }
+            .compactMap(Version.init)
+            .max()?
+            .original
+    }
+
+    public static func isNewer(_ candidate: String, than installed: String) -> Bool {
+        guard let candidate = Version(candidate), let installed = Version(installed) else {
+            return candidate != installed
+        }
+        return candidate > installed
+    }
+}
+
 public struct DSHLocalRuntime: Sendable, Equatable {
     public let version: String
     public let cliURL: URL
@@ -104,7 +177,8 @@ public struct DSHLocalRuntime: Sendable, Equatable {
     }
 
     public static func needsInstall(local: DSHLocalRuntime?, latestVersion: String) -> Bool {
-        local?.version != latestVersion
+        guard let local else { return true }
+        return DSHReleaseSelection.isNewer(latestVersion, than: local.version)
     }
 }
 
@@ -227,14 +301,9 @@ public final class SelfHealingStartup {
     }
 
     private func latestDSHPackage() async -> String? {
-        if let tag = await latestGitHubTag(), !tag.isEmpty {
-            return "@deepseek-ai/dsh@\(tag.hasPrefix("v") ? String(tag.dropFirst()) : tag)"
-        }
-        guard let url = URL(string: "https://registry.npmjs.org/@deepseek-ai/dsh/latest") else { return nil }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8
-        guard let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let version = json["version"] as? String else { return nil }
+        async let githubTag = latestGitHubTag()
+        async let npmVersion = latestNPMVersion(for: "@deepseek-ai/dsh")
+        guard let version = await DSHReleaseSelection.latest(githubTag: githubTag, npmVersion: npmVersion) else { return nil }
         return "@deepseek-ai/dsh@\(version)"
     }
 

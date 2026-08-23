@@ -26,6 +26,20 @@ final class OwnedBackendRecordTests: XCTestCase {
         XCTAssertFalse(record.matches(BackendProcessIdentity(pid: 42, uid: 501, processGroupID: 42, startTime: 1234, executablePath: identity.executablePath, command: "node worker.js"), supportDirectory: support))
     }
 
+    func testRecordAcceptsSystemNodeWhenRecordedDSHCLIIsAppOwned() {
+        let systemNode = BackendProcessIdentity(
+            pid: 42,
+            uid: 501,
+            processGroupID: 42,
+            startTime: 1234,
+            executablePath: "/opt/homebrew/bin/node",
+            command: "/opt/homebrew/bin/node /Users/test/Library/Application Support/DeepSeek Harness Desktop/dsh-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js web --host 127.0.0.1 --port 0 --no-open"
+        )
+        let record = OwnedBackendRecord(identity: systemNode)
+
+        XCTAssertTrue(record.matches(systemNode, supportDirectory: support))
+    }
+
     func testRegistryReclaimsMatchingRecordAndPreservesUnrelatedProcess() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let recordURL = root.appendingPathComponent("backend.json")
