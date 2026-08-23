@@ -139,7 +139,7 @@ public final class SelfHealingStartup {
     }
 
     private func makeSnapshot(profileDirectory: URL) throws -> StartupSnapshot {
-        let snapshotDirectory = supportURL.appendingPathComponent("snapshots/\(Int(Date().timeIntervalSince1970))", isDirectory: true)
+        let snapshotDirectory = supportURL.appendingPathComponent("snapshots/\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
         var existed: [String: Bool] = [:]
         for name in ["package.json", "pnpm-lock.yaml", "cordis.patch.yml"] {
@@ -172,7 +172,12 @@ public final class SelfHealingStartup {
         let manifestURL = profileDirectory.appendingPathComponent("package.json")
         guard let data = try? Data(contentsOf: manifestURL), var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], var dsh = json["dsh"] as? [String: Any], var profile = dsh["profile"] as? [String: Any], var bundles = profile["bundles"] as? [String] else { return nil }
         let named = bundles.filter { !$0.hasPrefix("@deepseek-ai/dsh-") && !$0.hasPrefix("@deepseek-ai/cordis-") && $0 != "@deepseek-ai/dsh-base" && $0 != "@deepseek-ai/dsh-web-app" && !excluding.contains($0) }
-        let target = named.last ?? (detail.contains("dsh-agent-preset-advisor") && !excluding.contains("dsh-agent-preset-advisor") ? "dsh-agent-preset-advisor" : nil)
+        // Prefer the bundle explicitly named by the bootstrap error. Only use
+        // the last third-party bundle as a conservative fallback when DSH
+        // provides no plugin identifier at all.
+        let target = named.first(where: { detail.localizedCaseInsensitiveContains($0) })
+            ?? named.first(where: { detail.localizedCaseInsensitiveContains($0.replacingOccurrences(of: "@", with: "")) })
+            ?? (detail.localizedCaseInsensitiveContains("plugin") ? named.last : nil)
         guard let target else { return nil }
         bundles.removeAll { $0 == target }
         profile["bundles"] = bundles
