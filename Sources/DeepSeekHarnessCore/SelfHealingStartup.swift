@@ -8,6 +8,15 @@ public enum StartupPhase: String, Sendable {
     case repairing = "检测到插件冲突，正在隔离并修复…"
 }
 
+public enum StartupLogPresentation: Sendable {
+    case starting
+    case running
+    case failed
+
+    public var showsControls: Bool { self != .running }
+    public var expandsLog: Bool { self == .failed }
+}
+
 public struct ClientPluginFailure: Sendable, Equatable {
     public let pluginID: String
     public let detail: String

@@ -35,6 +35,14 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertNil(ClientPluginFailureParser.failure(from: "DeepSeek Harness 新建会话 设置"))
     }
 
+    func testStartupLogControlsAreVisibleWhileStartingAndAfterFailure() {
+        XCTAssertTrue(StartupLogPresentation.starting.showsControls)
+        XCTAssertTrue(StartupLogPresentation.failed.showsControls)
+        XCTAssertFalse(StartupLogPresentation.running.showsControls)
+        XCTAssertTrue(StartupLogPresentation.failed.expandsLog)
+        XCTAssertFalse(StartupLogPresentation.starting.expandsLog)
+    }
+
     @MainActor
     func testDisablesOnlyPluginNamedByClientFailure() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

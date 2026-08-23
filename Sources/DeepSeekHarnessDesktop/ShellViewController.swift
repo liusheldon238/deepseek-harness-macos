@@ -13,6 +13,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     private let errorLogScrollView = NSScrollView()
     private let logToggleButton = NSButton(title: "展开启动日志", target: nil, action: nil)
     private let copyLogButton = NSButton(title: "复制日志", target: nil, action: nil)
+    private let logActions = NSStackView()
     private let progress = NSProgressIndicator()
     private let retryButton = NSButton(title: "重试", target: nil, action: nil)
     private let webView: WKWebView
@@ -74,7 +75,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         copyLogButton.bezelStyle = .inline
         copyLogButton.target = self
         copyLogButton.action = #selector(copyLogs)
-        let logActions = NSStackView(views: [logToggleButton, copyLogButton])
+        logActions.addArrangedSubview(logToggleButton)
+        logActions.addArrangedSubview(copyLogButton)
         logActions.spacing = 10
         logActions.isHidden = true
 
@@ -91,9 +93,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         progress.controlSize = .regular
         progress.startAnimation(nil)
         retryButton.isHidden = true
-        errorLogScrollView.isHidden = true
-        logToggleButton.isHidden = true
-        copyLogButton.isHidden = true
+        applyLogPresentation(.running)
         retryButton.target = self
         retryButton.action = #selector(retry)
 
@@ -133,11 +133,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         logoView.isHidden = false
         statusLabel.isHidden = false
         detailLabel.isHidden = false
-        errorLogScrollView.isHidden = true
-        logToggleButton.isHidden = false
-        copyLogButton.isHidden = false
         logExpanded = false
-        updateLogVisibility()
+        applyLogPresentation(.starting)
         errorLogView.string = ""
         statusLabel.stringValue = "正在扫描 Node.js…"
         detailLabel.stringValue = "将优先使用本机兼容环境；缺失时自动下载。"
@@ -169,9 +166,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
                 statusLabel.isHidden = true
                 detailLabel.isHidden = true
                 retryButton.isHidden = true
-                errorLogScrollView.isHidden = true
-                logToggleButton.isHidden = true
-                copyLogButton.isHidden = true
+                applyLogPresentation(.running)
                 logTimer?.invalidate()
                 logTimer = nil
                 webView.isHidden = false
@@ -196,10 +191,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         detailLabel.stringValue = error.localizedDescription
         let log = dshManager.latestLog.trimmingCharacters(in: .whitespacesAndNewlines)
         errorLogView.string = log.isEmpty ? "暂无后台输出。请点击“重试”再次启动。" : log
-        logToggleButton.isHidden = false
-        copyLogButton.isHidden = false
         logExpanded = true
-        updateLogVisibility()
+        applyLogPresentation(.failed)
         logTimer?.invalidate()
         logTimer = nil
     }
@@ -227,6 +220,15 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     private func updateLogVisibility() {
         errorLogScrollView.isHidden = !logExpanded
         logToggleButton.title = logExpanded ? "收起启动日志" : "展开启动日志"
+    }
+
+    private func applyLogPresentation(_ presentation: StartupLogPresentation) {
+        logActions.isHidden = !presentation.showsControls
+        logToggleButton.isHidden = !presentation.showsControls
+        copyLogButton.isHidden = !presentation.showsControls
+        if presentation.expandsLog { logExpanded = true }
+        if !presentation.showsControls { logExpanded = false }
+        updateLogVisibility()
     }
 
     func stopBackend() {
@@ -264,7 +266,7 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         statusLabel.isHidden = true
         detailLabel.isHidden = true
         retryButton.isHidden = true
-        errorLogScrollView.isHidden = true
+        applyLogPresentation(.running)
         webView.isHidden = false
         monitorClientPluginHealth()
     }
