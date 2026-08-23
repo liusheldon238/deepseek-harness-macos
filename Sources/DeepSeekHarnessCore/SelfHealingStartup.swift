@@ -209,6 +209,7 @@ public final class SelfHealingStartup {
         let dshPackage = await latestDSHPackage() ?? Self.fallbackDSHPackage
         try Task.checkCancellation()
         let runtimeDirectory = supportURL.appendingPathComponent("dsh-runtime", isDirectory: true)
+        try RuntimeStaging.cleanupInterrupted(targetDirectory: runtimeDirectory, fileManager: fileManager)
         var localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, expectedArchitecture: runtime.architecture, fileManager: fileManager)
         var runtimeStaging: RuntimeStaging?
         if let latestVersion = Self.packageVersion(dshPackage), DSHLocalRuntime.needsInstall(local: localDSH, latestVersion: latestVersion), let pnpm = pnpmURL() {

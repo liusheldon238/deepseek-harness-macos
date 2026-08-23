@@ -8,14 +8,20 @@ public struct RuntimeStaging {
     public static func begin(targetDirectory: URL, fileManager: FileManager = .default) throws -> RuntimeStaging {
         let parent = targetDirectory.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        try cleanupInterrupted(targetDirectory: targetDirectory, fileManager: fileManager)
+        let directory = parent.appendingPathComponent(".\(targetDirectory.lastPathComponent)-staging-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return RuntimeStaging(directory: directory, targetDirectory: targetDirectory, fileManager: fileManager)
+    }
+
+    public static func cleanupInterrupted(targetDirectory: URL, fileManager: FileManager = .default) throws {
+        let parent = targetDirectory.deletingLastPathComponent()
+        guard fileManager.fileExists(atPath: parent.path) else { return }
         let stalePrefix = ".\(targetDirectory.lastPathComponent)-staging-"
         for entry in try fileManager.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
             where entry.lastPathComponent.hasPrefix(stalePrefix) {
             try fileManager.removeItem(at: entry)
         }
-        let directory = parent.appendingPathComponent(".\(targetDirectory.lastPathComponent)-staging-\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return RuntimeStaging(directory: directory, targetDirectory: targetDirectory, fileManager: fileManager)
     }
 
     public func discard() throws {

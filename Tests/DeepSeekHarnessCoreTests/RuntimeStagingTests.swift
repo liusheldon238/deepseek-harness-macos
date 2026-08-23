@@ -47,4 +47,17 @@ final class RuntimeStagingTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("version"), encoding: .utf8), "verified")
         try staging.discard()
     }
+
+    func testExplicitCleanupWorksWhenNoRuntimeUpdateIsRequired() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let target = root.appendingPathComponent("dsh-runtime")
+        let stale = root.appendingPathComponent(".dsh-runtime-staging-interrupted")
+        try write("verified", to: target.appendingPathComponent("version"))
+        try write("partial", to: stale.appendingPathComponent("version"))
+
+        try RuntimeStaging.cleanupInterrupted(targetDirectory: target)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+        XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("version"), encoding: .utf8), "verified")
+    }
 }
