@@ -33,10 +33,10 @@ public final class DSHProcessManager {
         let process = Process()
         if let localDSHCLI {
             process.executableURL = runtime.nodeURL
-            process.arguments = [localDSHCLI.path, "web", "--host", "127.0.0.1", "--port", "0"]
+            process.arguments = [localDSHCLI.path, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
         } else {
             process.executableURL = runtime.npxURL
-            process.arguments = ["--yes", dshPackage, "web", "--host", "127.0.0.1", "--port", "0"]
+            process.arguments = ["--yes", dshPackage, "web", "--host", "127.0.0.1", "--port", "0", "--no-open"]
         }
         process.environment = environment
         process.standardOutput = handle
