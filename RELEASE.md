@@ -1,6 +1,6 @@
 # Releasing DeepSeek Harness Desktop
 
-Checklist for cutting a release. Current release: **v0.0.1**.
+Checklist for cutting a release. Current release: **v0.0.2**.
 
 ## Version source of truth
 
