@@ -39,6 +39,30 @@ public enum ClientPluginFailureParser {
     }
 }
 
+public enum PluginConflictResolver {
+    private static let coreBundles: Set<String> = [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app"
+    ]
+
+    public static func isCore(_ bundle: String) -> Bool {
+        coreBundles.contains(bundle)
+    }
+
+    public static func candidate(in detail: String, bundles: [String], excluding: [String]) -> String? {
+        let candidates = bundles.filter { !isCore($0) && !excluding.contains($0) }
+        let matches = candidates.filter { containsWholeIdentifier($0, in: detail) }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func containsWholeIdentifier(_ identifier: String, in detail: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: identifier)
+        let pattern = "(?<![@A-Za-z0-9._/-])\(escaped)(?![@A-Za-z0-9._/-])"
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
+        return expression.firstMatch(in: detail, range: NSRange(detail.startIndex..., in: detail)) != nil
+    }
+}
+
 public struct StartupReport: Sendable {
     public let runtime: NodeRuntime
     public let dshPackage: String
@@ -87,7 +111,7 @@ public struct DSHLocalRuntime: Sendable, Equatable {
 @MainActor
 public final class SelfHealingStartup {
     public static let fallbackDSHPackage = "@deepseek-ai/dsh@0.1.0-rc.6"
-    private static let corePluginPrefixes = ["@deepseek-ai/dsh-", "@deepseek-ai/cordis-"]
+    private static let registryCorePluginPrefixes = ["@deepseek-ai/dsh-", "@deepseek-ai/cordis-"]
     private let fileManager: FileManager
     private let supportURL: URL
     private let runtimeManager: NodeRuntimeManager
@@ -182,6 +206,7 @@ public final class SelfHealingStartup {
                     throw error
                 }
                 disabled.append(candidate)
+                processManager.suppressPluginForCurrentApplicationRun(candidate)
             }
         }
         processManager.stop()
@@ -194,7 +219,10 @@ public final class SelfHealingStartup {
         processManager.stop()
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
         let disabled = try disableNextPlugin(profileDirectory: profileDirectory, detail: failure.pluginID, excluding: [])
-        if let disabled { processManager.appendDiagnostic("检测到 WebView 插件激活失败，已禁用 \(disabled) 并准备重试。") }
+        if let disabled {
+            processManager.suppressPluginForCurrentApplicationRun(disabled)
+            processManager.appendDiagnostic("检测到 WebView 插件激活失败，已禁用 \(disabled) 并准备重试。")
+        }
         return disabled
     }
 
@@ -225,7 +253,7 @@ public final class SelfHealingStartup {
         guard let data = try? Data(contentsOf: manifestURL), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let dependencies = json["dependencies"] as? [String: String] else { return [] }
         let names = dependencies.keys.filter { name in
             let spec = dependencies[name] ?? ""
-            return !spec.hasPrefix("file:") && !Self.corePluginPrefixes.contains(where: name.hasPrefix) && name != "@deepseek-ai/dsh"
+            return !spec.hasPrefix("file:") && !Self.registryCorePluginPrefixes.contains(where: name.hasPrefix) && name != "@deepseek-ai/dsh"
         }.sorted()
         guard !names.isEmpty, let pnpm = pnpmURL() else { return [] }
         var updated: [String] = []
@@ -242,13 +270,7 @@ public final class SelfHealingStartup {
     private func disableNextPlugin(profileDirectory: URL, detail: String, excluding: [String]) throws -> String? {
         let manifestURL = profileDirectory.appendingPathComponent("package.json")
         guard let data = try? Data(contentsOf: manifestURL), var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], var dsh = json["dsh"] as? [String: Any], var profile = dsh["profile"] as? [String: Any], var bundles = profile["bundles"] as? [String] else { return nil }
-        let named = bundles.filter { !$0.hasPrefix("@deepseek-ai/dsh-") && !$0.hasPrefix("@deepseek-ai/cordis-") && $0 != "@deepseek-ai/dsh-base" && $0 != "@deepseek-ai/dsh-web-app" && !excluding.contains($0) }
-        // Prefer the bundle explicitly named by the bootstrap error. Only use
-        // the last third-party bundle as a conservative fallback when DSH
-        // provides no plugin identifier at all.
-        let target = named.first(where: { detail.localizedCaseInsensitiveContains($0) })
-            ?? named.first(where: { detail.localizedCaseInsensitiveContains($0.replacingOccurrences(of: "@", with: "")) })
-            ?? (detail.localizedCaseInsensitiveContains("plugin") ? named.last : nil)
+        let target = PluginConflictResolver.candidate(in: detail, bundles: bundles, excluding: excluding)
         guard let target else { return nil }
         bundles.removeAll { $0 == target }
         profile["bundles"] = bundles

@@ -80,6 +80,7 @@ public enum RuntimeError: LocalizedError, Sendable {
     case processTimedOut
     case pluginInstallFailed(String)
     case pluginConflict(String)
+    case domainHealthFailed(String, String)
     case dshDidNotStart(String)
 
     public var errorDescription: String {
@@ -94,6 +95,7 @@ public enum RuntimeError: LocalizedError, Sendable {
         case .processTimedOut: return "进程运行超时，已停止整个进程组。"
         case .pluginInstallFailed(let detail): return "插件安装失败：\(detail)"
         case .pluginConflict(let detail): return "插件冲突：\(detail)"
+        case .domainHealthFailed(let method, let detail): return "DeepSeek Harness 领域健康检查失败（\(method)）：\(detail)"
         case .dshDidNotStart(let detail): return "DeepSeek Harness 未能启动：\(detail)"
         }
     }

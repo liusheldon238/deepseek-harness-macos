@@ -78,4 +78,38 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertTrue(bundles.contains("dshmarket"))
         XCTAssertFalse(bundles.contains("dsh-agent-preset-advisor"))
     }
+
+    @MainActor
+    func testGenericPluginFailureDoesNotDisableArbitraryBundle() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let profile = root.appendingPathComponent("dsh-home/profiles/web")
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let manifest: [String: Any] = ["dsh": ["profile": ["bundles": ["@deepseek-ai/dsh-base", "dshmarket", "dsh-model-search"]]]]
+        let manifestURL = profile.appendingPathComponent("package.json")
+        let original = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
+        try original.write(to: manifestURL)
+        let startup = SelfHealingStartup(supportURL: root)
+
+        XCTAssertNil(try startup.disableConflictingPlugin(ClientPluginFailure(pluginID: "Web plugin startup failed", detail: "generic")))
+        let after = try Data(contentsOf: manifestURL)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: after) as? NSDictionary, try JSONSerialization.jsonObject(with: original) as? NSDictionary)
+    }
+
+    @MainActor
+    func testConflictResolverUsesWholeBundleIdentifierInsteadOfSubstring() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let profile = root.appendingPathComponent("dsh-home/profiles/web")
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let manifest: [String: Any] = ["dsh": ["profile": ["bundles": ["@deepseek-ai/dsh-base", "dsh-model", "dsh-model-search"]]]]
+        try JSONSerialization.data(withJSONObject: manifest).write(to: profile.appendingPathComponent("package.json"))
+        let startup = SelfHealingStartup(supportURL: root)
+
+        XCTAssertEqual(try startup.disableConflictingPlugin(ClientPluginFailure(pluginID: "dsh-model-search", detail: "web boot failed")), "dsh-model-search")
+    }
+
+    func testCorePluginPolicyUsesExplicitAllowlistNotNamespacePrefix() {
+        XCTAssertTrue(PluginConflictResolver.isCore("@deepseek-ai/dsh-base"))
+        XCTAssertTrue(PluginConflictResolver.isCore("@deepseek-ai/dsh-web-app"))
+        XCTAssertFalse(PluginConflictResolver.isCore("@deepseek-ai/dsh-third-party-lookalike"))
+    }
 }

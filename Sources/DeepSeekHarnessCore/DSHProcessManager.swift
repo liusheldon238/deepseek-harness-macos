@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 
 @MainActor
 public final class DSHProcessManager {
@@ -9,13 +8,22 @@ public final class DSHProcessManager {
     private var provisioningProcess: ManagedProcess?
     private var outputHandle: FileHandle?
     private let logURL: URL
+    private let backendRegistry: OwnedBackendRegistry
+    private let healthChecker: DSHHealthChecker
+    private var suppressedPluginBundles: Set<String> = []
 
-    public init(logURL: URL? = nil) {
+    public init(logURL: URL? = nil, healthChecker: DSHHealthChecker = DSHHealthChecker()) {
         self.logURL = logURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("DeepSeek Harness Desktop/dsh.log")
+        self.healthChecker = healthChecker
+        let supportURL = self.logURL.deletingLastPathComponent()
+        backendRegistry = OwnedBackendRegistry(recordURL: supportURL.appendingPathComponent("backend.json"), supportDirectory: supportURL)
     }
 
     public func start(using runtime: NodeRuntime, dshPackage: String = "@deepseek-ai/dsh@0.1.0-rc.6", localDSHCLI: URL? = nil) async throws -> URL {
         stop()
+        if try backendRegistry.reclaimStaleBackend() {
+            appendDiagnostic("已验证并回收 Desktop 遗留的 DSH 后台进程。")
+        }
         try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: logURL)
@@ -46,6 +54,14 @@ public final class DSHProcessManager {
             throw RuntimeError.processFailed(error.localizedDescription)
         }
         self.process = process
+        do {
+            try backendRegistry.record(pid: process.processIdentifier)
+            appendDiagnostic("DSH 后台 PID \(process.processIdentifier) 已记录。")
+        } catch {
+            process.terminateImmediately()
+            self.process = nil
+            throw error
+        }
 
         // The first launch can install several hundred MB of DSH dependencies
         // into the app-local npm cache. Keep the process alive long enough for
@@ -58,7 +74,10 @@ public final class DSHProcessManager {
             try Task.checkCancellation()
             if let output = try? String(contentsOf: logURL, encoding: .utf8), let url = DSHOutputParser.url(from: output) {
                 do {
-                    if try await Self.waitUntilHealthy(url: url, timeout: 30) { return url }
+                    if try await waitUntilHealthy(url: url, timeout: 30) {
+                        appendDiagnostic("领域健康检查通过：agentPreset.list, settings.describe。")
+                        return url
+                    }
                 } catch let error as RuntimeError {
                     stop()
                     throw error
@@ -77,15 +96,24 @@ public final class DSHProcessManager {
     }
 
     public func stop() {
+        let ownedProcessWasPresent = process != nil
         provisioningProcess?.terminateImmediately()
         self.provisioningProcess = nil
         process?.terminateImmediately()
         try? outputHandle?.close()
         outputHandle = nil
         process = nil
+        if ownedProcessWasPresent { try? backendRegistry.clear() }
     }
 
     public var isRunning: Bool { process?.isRunning == true }
+    public func suppressPluginForCurrentApplicationRun(_ bundleIdentifier: String) {
+        suppressedPluginBundles.insert(bundleIdentifier)
+    }
+    public func isHealthy(at url: URL) async -> Bool {
+        guard isRunning else { return false }
+        return (try? await healthChecker.check(baseURL: url)) != nil
+    }
     public var logFileURL: URL { logURL }
     public var latestLog: String {
         var parts: [String] = []
@@ -150,14 +178,10 @@ public final class DSHProcessManager {
     }
 
     private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String, localDSHCLI: URL?) async throws {
-        let manifestURL = profileDirectory.appendingPathComponent("package.json")
-        let installedDirectory = profileDirectory.appendingPathComponent("node_modules/\(packageName)")
-        if let data = try? Data(contentsOf: manifestURL),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let dependencies = json["dependencies"] as? [String: Any],
-           let installedSpec = dependencies[packageName] as? String,
-           FileManager.default.fileExists(atPath: installedDirectory.path),
-           (!packageSpec.hasPrefix("file:") || installedSpec == packageSpec || bundledPackageMatches(installedDirectory, packageSpec: packageSpec)) { return }
+        guard let descriptor = pluginDescriptor(packageSpec: packageSpec, packageName: packageName) else {
+            throw RuntimeError.pluginInstallFailed("无法读取 \(packageName) 的目标版本。")
+        }
+        if !BundledPluginReadiness.needsInstall(descriptor, in: profileDirectory, excludingBundles: suppressedPluginBundles) { return }
 
         let executable: URL
         let arguments: [String]
@@ -177,6 +201,9 @@ public final class DSHProcessManager {
             guard status == 0 else {
                 throw RuntimeError.pluginInstallFailed("安装 \(packageName) 失败，pnpm 退出码 \(status)。请查看上方内嵌日志后重试。")
             }
+            guard !BundledPluginReadiness.needsInstall(descriptor, in: profileDirectory) else {
+                throw RuntimeError.pluginInstallFailed("\(packageName) 命令已结束，但清单、已安装包或 bundle 激活状态仍不完整。")
+            }
         } catch {
             provisioningProcess = nil
             if error is CancellationError { throw error }
@@ -185,34 +212,30 @@ public final class DSHProcessManager {
         }
     }
 
-    private func bundledPackageMatches(_ installedDirectory: URL, packageSpec: String) -> Bool {
-        guard packageSpec.hasPrefix("file:"),
-              let installedData = try? Data(contentsOf: installedDirectory.appendingPathComponent("package.json")),
-              let installed = try? JSONSerialization.jsonObject(with: installedData) as? [String: Any],
-              let sourceData = try? Data(contentsOf: URL(fileURLWithPath: String(packageSpec.dropFirst(5))).appendingPathComponent("package.json")),
-              let source = try? JSONSerialization.jsonObject(with: sourceData) as? [String: Any] else { return false }
-        return installed["name"] as? String == source["name"] as? String && installed["version"] as? String == source["version"] as? String
+    private func pluginDescriptor(packageSpec: String, packageName: String) -> BundledPluginDescriptor? {
+        let version: String?
+        if packageSpec.hasPrefix("file:") {
+            let manifestURL = URL(fileURLWithPath: String(packageSpec.dropFirst(5))).appendingPathComponent("package.json")
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["name"] as? String == packageName else { return nil }
+            version = json["version"] as? String
+        } else {
+            version = nil
+        }
+        guard let version, !version.isEmpty else { return nil }
+        return BundledPluginDescriptor(packageName: packageName, packageSpec: packageSpec, expectedVersion: version, bundleIdentifier: packageName)
     }
 
-    private static func waitUntilHealthy(url: URL, timeout: TimeInterval) async throws -> Bool {
+    private func waitUntilHealthy(url: URL, timeout: TimeInterval) async throws -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             try Task.checkCancellation()
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                if (response as? HTTPURLResponse)?.statusCode == 200 {
-                    let body = String(data: data, encoding: .utf8) ?? ""
-                    if body.contains("Failed to load plugins") || body.contains("web boot:") {
-                        let detail = body.split(separator: "\n").first(where: { $0.contains("dsh-") || $0.contains("plugin") }) ?? "Web 插件启动失败"
-                        throw RuntimeError.pluginConflict(String(detail).trimmingCharacters(in: .whitespacesAndNewlines))
-                    }
-                    return true
-                }
+                _ = try await healthChecker.check(baseURL: url)
+                return true
             } catch let error as RuntimeError {
-                // Preserve the structured conflict signal for the self-healing
-                // coordinator; swallowing it would turn a repairable plugin
-                // failure into an opaque timeout.
-                throw error
+                if case .pluginConflict = error { throw error }
             } catch { }
             try await Task.sleep(for: .milliseconds(250))
         }
