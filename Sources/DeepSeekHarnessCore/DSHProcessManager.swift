@@ -124,12 +124,13 @@ public final class DSHProcessManager {
 
     private func installPluginIfNeeded(_ packageSpec: String, packageName: String, profileDirectory: URL, runtime: NodeRuntime, environment: [String: String], output: FileHandle, dshPackage: String) async throws {
         let manifestURL = profileDirectory.appendingPathComponent("package.json")
+        let installedDirectory = profileDirectory.appendingPathComponent("node_modules/\(packageName)")
         if let data = try? Data(contentsOf: manifestURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let dependencies = json["dependencies"] as? [String: Any],
            let installedSpec = dependencies[packageName] as? String,
-           (!packageSpec.hasPrefix("file:") || installedSpec == packageSpec),
-           FileManager.default.fileExists(atPath: profileDirectory.appendingPathComponent("node_modules/\(packageName)").path) { return }
+           FileManager.default.fileExists(atPath: installedDirectory.path),
+           (!packageSpec.hasPrefix("file:") || installedSpec == packageSpec || bundledPackageMatches(installedDirectory, packageSpec: packageSpec)) { return }
 
         let process = Process()
         process.executableURL = runtime.npxURL
@@ -155,6 +156,15 @@ public final class DSHProcessManager {
         guard process.terminationStatus == 0 else {
             throw RuntimeError.pluginInstallFailed("安装 \(packageName) 失败，pnpm 退出码 \(process.terminationStatus)。请查看上方内嵌日志后重试。")
         }
+    }
+
+    private func bundledPackageMatches(_ installedDirectory: URL, packageSpec: String) -> Bool {
+        guard packageSpec.hasPrefix("file:"),
+              let installedData = try? Data(contentsOf: installedDirectory.appendingPathComponent("package.json")),
+              let installed = try? JSONSerialization.jsonObject(with: installedData) as? [String: Any],
+              let sourceData = try? Data(contentsOf: URL(fileURLWithPath: String(packageSpec.dropFirst(5))).appendingPathComponent("package.json")),
+              let source = try? JSONSerialization.jsonObject(with: sourceData) as? [String: Any] else { return false }
+        return installed["name"] as? String == source["name"] as? String && installed["version"] as? String == source["version"] as? String
     }
 
     private static func waitUntilHealthy(url: URL, timeout: TimeInterval) async throws -> Bool {
