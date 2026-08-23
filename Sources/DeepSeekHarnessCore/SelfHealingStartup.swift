@@ -55,35 +55,6 @@ public struct StartupReport: Sendable {
     }
 }
 
-public struct StartupSnapshot: Sendable {
-    public let directory: URL
-    public let profileDirectory: URL
-    public let manifestExisted: Bool
-    public let lockfileExisted: Bool
-    public let patchExisted: Bool
-
-    public init(directory: URL, profileDirectory: URL, manifestExisted: Bool, lockfileExisted: Bool, patchExisted: Bool) {
-        self.directory = directory
-        self.profileDirectory = profileDirectory
-        self.manifestExisted = manifestExisted
-        self.lockfileExisted = lockfileExisted
-        self.patchExisted = patchExisted
-    }
-
-    public func restore(using fileManager: FileManager = .default) throws {
-        try Self.restoreFile("package.json", from: directory, to: profileDirectory, existed: manifestExisted, using: fileManager)
-        try Self.restoreFile("pnpm-lock.yaml", from: directory, to: profileDirectory, existed: lockfileExisted, using: fileManager)
-        try Self.restoreFile("cordis.patch.yml", from: directory, to: profileDirectory, existed: patchExisted, using: fileManager)
-    }
-
-    private static func restoreFile(_ name: String, from source: URL, to destination: URL, existed: Bool, using fileManager: FileManager) throws {
-        let destinationURL = destination.appendingPathComponent(name)
-        if fileManager.fileExists(atPath: destinationURL.path) { try fileManager.removeItem(at: destinationURL) }
-        let sourceURL = source.appendingPathComponent(name)
-        if existed && fileManager.fileExists(atPath: sourceURL.path) { try fileManager.copyItem(at: sourceURL, to: destinationURL) }
-    }
-}
-
 public enum StartupSemVer {
     public static func latest(_ values: [String]) -> String? {
         values.compactMap { try? SemVer($0) }.max()?.description
@@ -134,25 +105,48 @@ public final class SelfHealingStartup {
         let runtime = try await runtimeManager.resolve()
         progress(.dsh, "Node.js \(runtime.version)（\(runtime.architecture.rawValue)）")
         let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
-        let snapshot = try makeSnapshot(profileDirectory: profileDirectory)
+        let snapshotsDirectory = supportURL.appendingPathComponent("snapshots", isDirectory: true)
+        var transaction = try ProfileTransaction.begin(profileDirectory: profileDirectory, snapshotsDirectory: snapshotsDirectory, fileManager: fileManager)
+        var rolledBack = false
         let dshPackage = await latestDSHPackage() ?? Self.fallbackDSHPackage
+        try Task.checkCancellation()
         let runtimeDirectory = supportURL.appendingPathComponent("dsh-runtime", isDirectory: true)
         var localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, expectedArchitecture: runtime.architecture, fileManager: fileManager)
+        var runtimeStaging: RuntimeStaging?
         if let latestVersion = Self.packageVersion(dshPackage), DSHLocalRuntime.needsInstall(local: localDSH, latestVersion: latestVersion), let pnpm = pnpmURL() {
             progress(.dsh, "发现 DSH \(latestVersion)，正在更新一次性本地运行时…")
-            try fileManager.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
-            let result = try await run(pnpm, arguments: ["add", "--dir", runtimeDirectory.path, dshPackage], cwd: supportURL, runtime: runtime)
-            if result == 0 {
-                try Data("\(runtime.architecture.rawValue)\n".utf8).write(to: runtimeDirectory.appendingPathComponent("node-architecture"), options: .atomic)
-                localDSH = DSHLocalRuntime.inspect(directory: runtimeDirectory, expectedArchitecture: runtime.architecture, fileManager: fileManager)
-                processManager.appendDiagnostic("DSH 本地运行时已更新到 \(localDSH?.version ?? latestVersion)。")
-            } else {
-                processManager.appendDiagnostic("DSH \(latestVersion) 更新失败，继续使用最后一次可用的本地版本。")
+            let staging = try RuntimeStaging.begin(targetDirectory: runtimeDirectory, fileManager: fileManager)
+            do {
+                let result = try await run(pnpm, arguments: ["add", "--dir", staging.directory.path, dshPackage], cwd: supportURL, runtime: runtime)
+                try Data("\(runtime.architecture.rawValue)\n".utf8).write(to: staging.directory.appendingPathComponent("node-architecture"), options: .atomic)
+                let candidate = result == 0 ? DSHLocalRuntime.inspect(directory: staging.directory, expectedArchitecture: runtime.architecture, fileManager: fileManager) : nil
+                if let candidate {
+                    localDSH = candidate
+                    runtimeStaging = staging
+                    processManager.appendDiagnostic("DSH 候选运行时 \(candidate.version) 已准备，待健康验证后替换。")
+                } else {
+                    try staging.discard()
+                    processManager.appendDiagnostic("DSH \(latestVersion) 更新失败，继续使用最后一次可用的本地版本。")
+                }
+            } catch {
+                try? staging.discard()
+                if error is CancellationError {
+                    try transaction.restore()
+                    throw error
+                }
+                processManager.appendDiagnostic("DSH \(latestVersion) 更新超时或失败，继续使用最后一次可用的本地版本。")
             }
         }
         let selectedPackage = localDSH.map { "@deepseek-ai/dsh@\($0.version)" } ?? dshPackage
         progress(.plugins, "本地 DSH：\(selectedPackage)")
-        var updated = try await updateRegistryPlugins(profileDirectory: profileDirectory, runtime: runtime, dshPackage: selectedPackage)
+        var updated: [String]
+        do {
+            updated = try await updateRegistryPlugins(profileDirectory: profileDirectory, runtime: runtime, dshPackage: selectedPackage)
+        } catch {
+            try? runtimeStaging?.discard()
+            try transaction.restore()
+            throw error
+        }
         var disabled: [String] = []
         var candidatePackage = selectedPackage
         var candidateLocalCLI = localDSH?.cliURL
@@ -160,15 +154,22 @@ public final class SelfHealingStartup {
             do {
                 progress(.launching, candidatePackage)
                 let url = try await processManager.start(using: runtime, dshPackage: candidatePackage, localDSHCLI: candidateLocalCLI)
-                return (url, StartupReport(runtime: runtime, dshPackage: candidatePackage, updatedPlugins: updated, disabledPlugins: disabled))
+                try runtimeStaging?.promote()
+                runtimeStaging = nil
+                try transaction.commit()
+                return (url, StartupReport(runtime: runtime, dshPackage: candidatePackage, updatedPlugins: updated, disabledPlugins: disabled, rolledBack: rolledBack))
             } catch let error as RuntimeError {
                 guard case .pluginConflict(let detail) = error else {
                     processManager.stop()
-                    try? snapshot.restore(using: fileManager)
+                    try? runtimeStaging?.discard()
+                    runtimeStaging = nil
+                    try transaction.restore()
+                    rolledBack = true
                     if candidatePackage != Self.fallbackDSHPackage {
                         candidatePackage = Self.fallbackDSHPackage
                         candidateLocalCLI = nil
                         updated = []
+                        transaction = try ProfileTransaction.begin(profileDirectory: profileDirectory, snapshotsDirectory: snapshotsDirectory, fileManager: fileManager)
                         continue
                     }
                     throw error
@@ -176,14 +177,16 @@ public final class SelfHealingStartup {
                 progress(.repairing, detail)
                 guard let candidate = try disableNextPlugin(profileDirectory: profileDirectory, detail: detail, excluding: disabled) else {
                     processManager.stop()
-                    try? snapshot.restore(using: fileManager)
+                    try? runtimeStaging?.discard()
+                    try transaction.restore()
                     throw error
                 }
                 disabled.append(candidate)
             }
         }
         processManager.stop()
-        try? snapshot.restore(using: fileManager)
+        try? runtimeStaging?.discard()
+        try transaction.restore()
         throw RuntimeError.dshDidNotStart("自动隔离插件后仍无法启动：\(disabled.joined(separator: ", "))")
     }
 
@@ -215,19 +218,6 @@ public final class SelfHealingStartup {
         guard let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let tag = json["tag_name"] as? String else { return nil }
         return tag
-    }
-
-    private func makeSnapshot(profileDirectory: URL) throws -> StartupSnapshot {
-        let snapshotDirectory = supportURL.appendingPathComponent("snapshots/\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
-        var existed: [String: Bool] = [:]
-        for name in ["package.json", "pnpm-lock.yaml", "cordis.patch.yml"] {
-            let source = profileDirectory.appendingPathComponent(name)
-            let value = fileManager.fileExists(atPath: source.path)
-            existed[name] = value
-            if value { try fileManager.copyItem(at: source, to: snapshotDirectory.appendingPathComponent(name)) }
-        }
-        return StartupSnapshot(directory: snapshotDirectory, profileDirectory: profileDirectory, manifestExisted: existed["package.json"] == true, lockfileExisted: existed["pnpm-lock.yaml"] == true, patchExisted: existed["cordis.patch.yml"] == true)
     }
 
     private func updateRegistryPlugins(profileDirectory: URL, runtime: NodeRuntime, dshPackage: String) async throws -> [String] {

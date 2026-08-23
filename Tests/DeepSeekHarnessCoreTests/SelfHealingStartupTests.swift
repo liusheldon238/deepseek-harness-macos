@@ -8,19 +8,6 @@ final class SelfHealingStartupTests: XCTestCase {
         XCTAssertNil(StartupSemVer.latest(["bad", "0.2"]))
     }
 
-    func testSnapshotRestoresProfileFiles() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let profile = root.appendingPathComponent("profile")
-        let snapshotDir = root.appendingPathComponent("snapshot")
-        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
-        try Data("old".utf8).write(to: snapshotDir.appendingPathComponent("package.json"))
-        try Data("new".utf8).write(to: profile.appendingPathComponent("package.json"))
-        let snapshot = StartupSnapshot(directory: snapshotDir, profileDirectory: profile, manifestExisted: true, lockfileExisted: false, patchExisted: false)
-        try snapshot.restore()
-        XCTAssertEqual(try String(contentsOf: profile.appendingPathComponent("package.json")), "old")
-    }
-
     func testClientPluginFailureParsesBrowserRenderedError() {
         let text = """
         Failed to load plugins
