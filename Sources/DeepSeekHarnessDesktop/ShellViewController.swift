@@ -18,8 +18,10 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     private let webView: WKWebView
     private var started = false
     private var startupTask: Task<Void, Never>?
+    private var webHealthTask: Task<Void, Never>?
     private var logTimer: Timer?
     private var logExpanded = false
+    private var clientRepairAttempts = 0
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         let configuration = WKWebViewConfiguration()
@@ -117,10 +119,11 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     }
 
     @objc private func retry() {
-        startBackend()
+        startBackend(resetRepairAttempts: true)
     }
 
-    private func startBackend() {
+    private func startBackend(resetRepairAttempts: Bool = true) {
+        if resetRepairAttempts { clientRepairAttempts = 0 }
         started = true
         retryButton.isHidden = true
         progress.isHidden = false
@@ -140,6 +143,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         detailLabel.stringValue = "将优先使用本机兼容环境；缺失时自动下载。"
 
         startupTask?.cancel()
+        webHealthTask?.cancel()
+        webHealthTask = nil
         logTimer?.invalidate()
         logTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refreshLog() }
@@ -227,6 +232,8 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
     func stopBackend() {
         startupTask?.cancel()
         startupTask = nil
+        webHealthTask?.cancel()
+        webHealthTask = nil
         dshManager.stop()
         logTimer?.invalidate()
         logTimer = nil
@@ -259,6 +266,46 @@ final class ShellViewController: NSViewController, WKNavigationDelegate {
         retryButton.isHidden = true
         errorLogScrollView.isHidden = true
         webView.isHidden = false
+        monitorClientPluginHealth()
+    }
+
+    private func monitorClientPluginHealth() {
+        webHealthTask?.cancel()
+        webHealthTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0..<24 {
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let text = try? await webView.evaluateJavaScript("document.body ? document.body.innerText : ''") as? String,
+                      let failure = ClientPluginFailureParser.failure(from: text) else { continue }
+                await recoverFromClientPluginFailure(failure)
+                return
+            }
+        }
+    }
+
+    private func recoverFromClientPluginFailure(_ failure: ClientPluginFailure) async {
+        guard clientRepairAttempts < 6 else {
+            showError(RuntimeError.pluginConflict("自动隔离插件达到上限：\(failure.pluginID)"))
+            return
+        }
+        do {
+            guard let disabled = try startupManager.disableConflictingPlugin(failure) else {
+                showError(RuntimeError.pluginConflict("无法从配置中定位插件：\(failure.pluginID)"))
+                return
+            }
+            clientRepairAttempts += 1
+            webView.stopLoading()
+            webView.isHidden = true
+            logoView.isHidden = false
+            statusLabel.isHidden = false
+            detailLabel.isHidden = false
+            statusLabel.stringValue = "已隔离冲突插件，正在重试…"
+            detailLabel.stringValue = disabled
+            startBackend(resetRepairAttempts: false)
+        } catch {
+            showError(error)
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

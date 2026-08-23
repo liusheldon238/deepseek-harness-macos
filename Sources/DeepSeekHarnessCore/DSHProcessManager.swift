@@ -94,6 +94,10 @@ public final class DSHProcessManager {
     public var logFileURL: URL { logURL }
     public var latestLog: String {
         var parts: [String] = []
+        let desktopLogURL = logURL.deletingLastPathComponent().appendingPathComponent("desktop.log")
+        if let desktopLog = try? String(contentsOf: desktopLogURL, encoding: .utf8), !desktopLog.isEmpty {
+            parts.append("[Desktop 自修复日志]\n" + String(desktopLog.suffix(12000)))
+        }
         if let log = try? String(contentsOf: logURL, encoding: .utf8), !log.isEmpty { parts.append(log) }
         let npmLogDirectory = logURL.deletingLastPathComponent().appendingPathComponent("npm-cache/_logs", isDirectory: true)
         if let newest = (try? FileManager.default.contentsOfDirectory(at: npmLogDirectory, includingPropertiesForKeys: [.contentModificationDateKey]))?
@@ -104,6 +108,17 @@ public final class DSHProcessManager {
             parts.append("[npm 调试日志]\n" + String(npmLog.suffix(12000)))
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    public func appendDiagnostic(_ message: String) {
+        let desktopLogURL = logURL.deletingLastPathComponent().appendingPathComponent("desktop.log")
+        try? FileManager.default.createDirectory(at: desktopLogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: desktopLogURL.path) { FileManager.default.createFile(atPath: desktopLogURL.path, contents: nil) }
+        guard let handle = try? FileHandle(forWritingTo: desktopLogURL) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+        try? handle.write(contentsOf: Data(line.utf8))
     }
 
     private func installEnvironment(using runtime: NodeRuntime) throws -> [String: String] {

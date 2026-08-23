@@ -8,6 +8,28 @@ public enum StartupPhase: String, Sendable {
     case repairing = "检测到插件冲突，正在隔离并修复…"
 }
 
+public struct ClientPluginFailure: Sendable, Equatable {
+    public let pluginID: String
+    public let detail: String
+
+    public init(pluginID: String, detail: String) {
+        self.pluginID = pluginID
+        self.detail = detail
+    }
+}
+
+public enum ClientPluginFailureParser {
+    public static func failure(from text: String) -> ClientPluginFailure? {
+        guard text.localizedCaseInsensitiveContains("Failed to load plugins"),
+              text.localizedCaseInsensitiveContains("web boot:") else { return nil }
+        let pattern = #"did not activate\s+([@A-Za-z0-9._/-]+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return ClientPluginFailure(pluginID: String(text[range]), detail: String(text.suffix(4000)))
+    }
+}
+
 public struct StartupReport: Sendable {
     public let runtime: NodeRuntime
     public let dshPackage: String
@@ -114,6 +136,14 @@ public final class SelfHealingStartup {
         processManager.stop()
         try? snapshot.restore(using: fileManager)
         throw RuntimeError.dshDidNotStart("自动隔离插件后仍无法启动：\(disabled.joined(separator: ", "))")
+    }
+
+    public func disableConflictingPlugin(_ failure: ClientPluginFailure) throws -> String? {
+        processManager.stop()
+        let profileDirectory = supportURL.appendingPathComponent("dsh-home/profiles/web", isDirectory: true)
+        let disabled = try disableNextPlugin(profileDirectory: profileDirectory, detail: failure.pluginID, excluding: [])
+        if let disabled { processManager.appendDiagnostic("检测到 WebView 插件激活失败，已禁用 \(disabled) 并准备重试。") }
+        return disabled
     }
 
     private func latestDSHPackage() async -> String? {
