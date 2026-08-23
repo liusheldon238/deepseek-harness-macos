@@ -15,7 +15,7 @@ final class DesktopBundledPluginCatalogTests: XCTestCase {
         )
 
         XCTAssertEqual(plugins.map(\.packageName), ["dsh-preset-catalog", "dsh-model-search"])
-        XCTAssertEqual(plugins.map(\.expectedVersion), ["0.1.0", "0.1.0"])
+        XCTAssertEqual(plugins.map(\.expectedVersion), ["0.1.1", "0.1.1"])
         XCTAssertEqual(plugins.map(\.bundleIdentifier), ["dsh-preset-catalog", "dsh-model-search"])
         XCTAssertTrue(plugins.allSatisfy { $0.packageSpec.hasPrefix("file:") })
     }

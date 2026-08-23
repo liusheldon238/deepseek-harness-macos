@@ -12,7 +12,7 @@ Native macOS shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 - Uses an existing Node.js only when it is at least `22.19.0` and matches the host CPU architecture.
 - Downloads Node.js `22.23.1` for Apple Silicon or Intel when the local environment is missing or incompatible.
 - Verifies the official Node archive SHA-256 before extraction.
-- Starts `@deepseek-ai/dsh@0.1.0-rc.6` on loopback with an OS-selected free port.
+- Checks GitHub and npm, keeps the newest compatible local DSH, and starts it on loopback with an OS-selected free port (`0.1.0-rc.6` is only the offline fallback).
 - Initializes the app-owned web profile and installs `dshmarket@1.13.1` on first launch, so the DSH Web UI includes a plugin marketplace for browsing, installing, updating, disabling, and removing other plugins.
 - Installs the pinned `dsh-preset-catalog` and `dsh-model-search` snapshots from `Resources/Plugins` in that order. The catalog provides searchable domain presets; model search improves composer and `/model` selection while preserving raw model IDs.
 - On every launch, verifies that Node matches the host architecture (Apple Silicon uses arm64 only), checks the latest DeepSeek Harness release, updates registry plugins one at a time, snapshots the profile, and rolls back failed updates.

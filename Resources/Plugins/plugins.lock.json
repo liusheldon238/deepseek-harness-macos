@@ -3,25 +3,25 @@
   "plugins": [
     {
       "packageName": "dsh-preset-catalog",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bundleIdentifier": "dsh-preset-catalog",
       "path": "dsh-preset-catalog",
       "repository": "https://github.com/liusheldon238/dsh-preset-catalog",
-      "commit": "4ad76973914da1bf49d156b6143705e8c33d1c9d",
-      "releaseURL": "https://github.com/liusheldon238/dsh-preset-catalog/releases/tag/v0.1.0",
-      "releaseAssetURL": "https://github.com/liusheldon238/dsh-preset-catalog/releases/download/v0.1.0/dsh-preset-catalog-0.1.0.tgz",
-      "releaseAssetSHA256": "95b30dd1911a880b22b56cf02566a94688b58fbc72e66356e0597db50e469c9f"
+      "commit": "be4010fd8588ade814df81705ed8e80471218f43",
+      "releaseURL": "https://github.com/liusheldon238/dsh-preset-catalog/releases/tag/v0.1.1",
+      "releaseAssetURL": "https://github.com/liusheldon238/dsh-preset-catalog/releases/download/v0.1.1/dsh-preset-catalog-0.1.1.tgz",
+      "releaseAssetSHA256": "08c236584cd49bdd6b094c9c6be210fa761c5a2b89c851bab9a43cd2708a9d6b"
     },
     {
       "packageName": "dsh-model-search",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bundleIdentifier": "dsh-model-search",
       "path": "dsh-model-search",
       "repository": "https://github.com/liusheldon238/dsh-model-search",
-      "commit": "f902f6695f408c384d6f78f9fa9a7fc17e694e0e",
-      "releaseURL": "https://github.com/liusheldon238/dsh-model-search/releases/tag/v0.1.0",
-      "releaseAssetURL": "https://github.com/liusheldon238/dsh-model-search/releases/download/v0.1.0/dsh-model-search-0.1.0.tgz",
-      "releaseAssetSHA256": "b3545bc63e79ecc1a217d1cf2bea35743e2fe2c0893f701fe7ecb4412f946f9a"
+      "commit": "c9c43358be5555d07a03e379e6e8c32c2388fcc5",
+      "releaseURL": "https://github.com/liusheldon238/dsh-model-search/releases/tag/v0.1.1",
+      "releaseAssetURL": "https://github.com/liusheldon238/dsh-model-search/releases/download/v0.1.1/dsh-model-search-0.1.1.tgz",
+      "releaseAssetSHA256": "1194ce0cc14d495931d1c0e434f7974d4cb6426bc54d15c111d6adeb20529b51"
     }
   ]
 }
